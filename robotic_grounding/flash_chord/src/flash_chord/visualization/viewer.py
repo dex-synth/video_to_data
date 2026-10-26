@@ -192,25 +192,31 @@ def configure_camera(viewer, config: ViewerConfig) -> None:
     if config.camera_position is None or config.camera_target is None:
         return
     camera = getattr(viewer, "camera", None)
-    if camera is None or not hasattr(viewer, "set_camera"):
+    if not hasattr(viewer, "set_camera") or (camera is None and config.backend != "viser"):
         raise ValueError(f"viewer backend {config.backend!r} does not support camera configuration")
+
+    # Viser uses the model's up-axis and has no GL Camera object.
+    up_axis = camera.up_axis if camera is not None else viewer.model.up_axis
+    if isinstance(up_axis, str):
+        up_axis = "XYZ".index(up_axis.upper())
 
     direction = tuple(target - position for position, target in zip(config.camera_position, config.camera_target))
     distance = math.sqrt(sum(component * component for component in direction))
     if distance <= 1.0e-8:
         raise ValueError("viewer camera_position and camera_target must be distinct")
     unit = tuple(component / distance for component in direction)
-    if camera.up_axis == 0:
+    if up_axis == 0:
         pitch = math.degrees(math.asin(unit[0]))
         yaw = math.degrees(math.atan2(unit[2], unit[1]))
-    elif camera.up_axis == 1:
+    elif up_axis == 1:
         pitch = math.degrees(math.asin(unit[1]))
         yaw = math.degrees(math.atan2(unit[2], unit[0]))
     else:
         pitch = math.degrees(math.asin(unit[2]))
         yaw = math.degrees(math.atan2(unit[1], unit[0]))
     viewer.set_camera(config.camera_position, pitch, yaw)
-    camera.set_pivot(config.camera_target)
+    if camera is not None:
+        camera.set_pivot(config.camera_target)
 
 
 def configure_render_style(viewer, config: ViewerConfig, scene=None) -> None:

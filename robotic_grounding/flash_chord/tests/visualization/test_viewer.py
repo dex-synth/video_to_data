@@ -134,6 +134,22 @@ def test_viewer_config_rejects_incomplete_camera_and_odd_video_dimensions():
         ViewerConfig(backend="mp4", output_path="policy.usd")
 
 
+@pytest.mark.parametrize("up_axis", (2, "Z"))
+def test_viser_camera_configuration_without_gl_camera(up_axis):
+    viewer = SimpleNamespace(model=SimpleNamespace(up_axis=up_axis), poses=[])
+    viewer.set_camera = lambda position, pitch, yaw: viewer.poses.append((position, pitch, yaw))
+    config = ViewerConfig(
+        backend="viser", camera_position=(1.0, 0.0, 1.0), camera_target=(0.0, 0.0, 0.0)
+    )
+
+    configure_camera(viewer, config)
+
+    position, pitch, yaw = viewer.poses[0]
+    assert position == (1.0, 0.0, 1.0)
+    assert pitch == pytest.approx(-45.0)
+    assert abs(yaw) == pytest.approx(180.0)
+
+
 def test_native_debug_parser_excludes_usd_and_rerun_transports():
     parser = viewer_module.newton.examples.create_parser()
     _restrict_native_viewer_parser(parser)
