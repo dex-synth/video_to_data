@@ -79,6 +79,8 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 
 Newton 1.2 有三处需显式补偿的导入行为：position `dampratio` 在其 joint-target 路径中未转换为实际阻尼，因此从 `compiled.json` 写入 `kv`；小惯量自动修正会抬高虚拟腕／marker 惯量，因此在局部 builder 中保留经过 MuJoCo 验证的原惯量；scalar joint 总限力被默认启用，因此同时恢复 CPU 检查模型和 GPU 模型中的共同限力开关。无需修改 Newton 本身。
 
+H2R 训练配方设置 `sim.njmax=1024`，为共同机器人与详细物体碰撞分配每个 world 的约束容量；此项由方法配置直接传给求解器，不改变共同物理参数。旧 checkpoint 保存的容量不会随配方更新而变化，使用 `scripts/view_policy.py` 加载时应显式传入 `sim.njmax=1024`，该覆盖会同步到实际使用的 `env.sim.njmax`。`scripts/evaluate_policy.py` 当前直接读取 checkpoint 配置，不提供此覆盖入口，不能仅修改训练 YAML 就认为旧 checkpoint 的评估容量已更新。
+
 每次创建 solver 都检查最终 MuJoCo 模型的关节、质量、COM、惯量、重力补偿、位置驱动 gain／bias／限幅、接触参数、碰撞凸包、有效碰撞配对和桌面尺寸。错误在训练前抛出；这些检查说明当前映射保留了相应参数与几何，不宣称 MuJoCo CPU 与 MuJoCo-Warp 数值轨迹完全相同。
 
 ## 本地检查
