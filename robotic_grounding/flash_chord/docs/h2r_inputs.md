@@ -77,11 +77,15 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 - 物体直接派生 MJCF，避免不必要的 URDF 转换；`ObjectAssetSpec.urdf_path` 沿用原生字段名，在 H2R 专用 scene 中指向此 MJCF。不回退同名 ARCTIC 资产、不再分解碰撞网格、不添加无限地面。保留固定连杆以便逐 body 核对惯量和 frame。
 - 名义物理以共同包为准，覆盖原生场景的摩擦和 solver 默认值。只有控制时钟写在 H2R experiment 中；通用 `sim`／`scene.contact_friction` 默认值不覆盖共同包。VOC、随机 reset 和训练课程仍为方法训练机制，不能用于将来的共同评估。
 
-Newton 1.2 有三处需显式补偿的导入行为：position `dampratio` 在其 joint-target 路径中未转换为实际阻尼，因此从 `compiled.json` 写入 `kv`；小惯量自动修正会抬高虚拟腕／marker 惯量，因此在局部 builder 中保留经过 MuJoCo 验证的原惯量；scalar joint 总限力被默认启用，因此同时恢复 CPU 检查模型和 GPU 模型中的共同限力开关。无需修改 Newton 本身。
+依赖锁定为 MuJoCo / MuJoCo-Warp 3.11.0、Warp 1.16.0、Newton 1.5.0，与 h2r_bench 评估环境的 MuJoCo 版本一致。Newton 1.2 使用的旧接口不能直接运行 MuJoCo-Warp 3.11。准备资产仍从 `compiled.json` 写入实际 `kp/kv`；局部 builder 保留共同虚拟腕／marker 的小惯量；CPU 检查模型和 GPU 模型均恢复共同 scalar joint 总限力开关。
+
+桌面几何来自共同场景导出的 `support.usda`，运行时通过 world-parented fixed joint 建立固定支撑，没有额外 q/DOF。不能用运动学 free joint 代替：Newton 为其增加的巨大 armature 会放大 GPU `meaninertia`，使整个场景提前停止求解。FlashCHORD 的 MuJoCo solver 显式开启 MultiCCD。H2R 还显式写入共同 `margin/gap` 和 raw `solref`，防止 Newton 默认接触包络或原始手指垫材料覆盖共同条件。
 
 H2R 训练配方设置 `sim.njmax=1024`，为共同机器人与详细物体碰撞分配每个 world 的约束容量；此项由方法配置直接传给求解器，不改变共同物理参数。旧 checkpoint 保存的容量不会随配方更新而变化，使用 `scripts/view_policy.py` 加载时应显式传入 `sim.njmax=1024`，该覆盖会同步到实际使用的 `env.sim.njmax`。`scripts/evaluate_policy.py` 当前直接读取 checkpoint 配置，不提供此覆盖入口，不能仅修改训练 YAML 就认为旧 checkpoint 的评估容量已更新。
 
-每次创建 solver 都检查最终 MuJoCo 模型的关节、质量、COM、惯量、重力补偿、位置驱动 gain／bias／限幅、接触参数、碰撞凸包、有效碰撞配对和桌面尺寸。错误在训练前抛出；这些检查说明当前映射保留了相应参数与几何，不宣称 MuJoCo CPU 与 MuJoCo-Warp 数值轨迹完全相同。
+每次创建 solver 都检查最终 MuJoCo 模型的关节、质量、COM、惯量、重力补偿、位置驱动 gain／bias／限幅、接触参数、碰撞凸包、有效碰撞配对和桌面尺寸；额外核验动态自由度、固定支撑、物理开关，以及实际 GPU 模型的 armature、meaninertia 和接触参数。错误在训练前抛出；这些检查不宣称 MuJoCo CPU 与 MuJoCo-Warp 长时闭环轨迹完全相同。
+
+旧 checkpoint 的网络仍可加载，但修正桌面、MultiCCD 和依赖版本会改变原生训练／rollout 物理。旧产物不应标为已在当前物理条件训练；重新运行和训练须另存输出，不能覆盖旧结果。
 
 ## 本地检查
 
@@ -93,6 +97,16 @@ FLASHCHORD_H2R_BINDING="$PREPARED/h2r_binding.json" \
 ```
 
 无准备产物时集成检查显式 skip。GPU 检查覆盖原生 processed action／正则化一致性、共同 FK、零额外腕力矩和短物理 rollout；独立腕转换检查同时覆盖 CPU 与 GPU。输入集合验收应对每个实际共同包执行准备和模型检查，不能从 box 的训练 smoke 推导其他序列的训练性能。
+
+实际动力学回归额外读取 bench 独立编译的完整场景，不从方法模型生成期望值：
+
+```bash
+FLASHCHORD_H2R_BINDING="$PREPARED/h2r_binding.json" \
+FLASHCHORD_H2R_SCENE=/path/to/bench-task/scene/scene.xml \
+  "$FLASH_PY" -m pytest -q tests/test_h2r_physics.py
+```
+
+该检查覆盖实际 GPU 参数的故障注入，以及相同首帧和相同关节目标下含接触的短 CPU/GPU rollout。
 
 ## 共同物理评估部署
 

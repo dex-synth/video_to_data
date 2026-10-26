@@ -161,8 +161,8 @@ def _torque_pulse(*, passive: bool):
     state_0, state_1 = model.state(), model.state()
     control = model.control()
     contacts = model.contacts()
-    control.joint_target_pos.assign([0.8])
-    control.joint_target_vel.zero_()
+    control.joint_target_q.assign([0.8])
+    control.joint_target_qd.zero_()
     if not passive:
         drive = ScaledJointTargetDrive.build(solver, (0,), world_count=1)
         drive.apply(wp.array([0.0], dtype=wp.float32))
@@ -204,8 +204,8 @@ def test_full_scaled_implicit_drive_is_bounded_at_100_hz():
         state_0, state_1 = model.state(), model.state()
         control = model.control()
         contacts = model.contacts()
-        control.joint_target_pos.assign([0.5])
-        control.joint_target_vel.zero_()
+        control.joint_target_q.assign([0.5])
+        control.joint_target_qd.zero_()
         drive = ScaledJointTargetDrive.build(solver, (0,), world_count=1)
         drive.apply(wp.array([1.0], dtype=wp.float32))
 

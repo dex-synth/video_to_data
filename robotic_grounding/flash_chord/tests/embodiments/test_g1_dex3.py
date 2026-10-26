@@ -199,4 +199,4 @@ def test_g1_control_parameters_and_default_pose_match_upstream(g1):
             0.0,
         )
         assert builder.joint_q[q_id] == pytest.approx(expected_default)
-        assert builder.joint_target_pos[dof_id] == pytest.approx(expected_default)
+        assert builder.joint_target_q[dof_id] == pytest.approx(expected_default)

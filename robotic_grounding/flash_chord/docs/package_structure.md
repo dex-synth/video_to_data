@@ -29,5 +29,9 @@ Top-level entry points are in `scripts/`:
 `workflow/` contains remote training and evaluation templates. `tests/` separates pure/unit coverage from optional
 CUDA and local-sequence integration coverage.
 
+`scene/support.py` attaches support surfaces to the world with a fixed joint; support bindings own bodies and shapes,
+not dynamic coordinates. `runtime/sim.py` enables MuJoCo MultiCCD. The H2R adapter additionally validates the active
+GPU model against the common scene; see [H2R inputs and physics checks](h2r_inputs.md).
+
 Reference sequence corpora, system-identification data/pipelines, retired experiment matrices, policy exporters,
 and checkpoint migration layers are not part of the release branch.

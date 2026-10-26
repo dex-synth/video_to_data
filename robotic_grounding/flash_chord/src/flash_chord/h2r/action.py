@@ -73,7 +73,7 @@ class PositionController:
     """Position targets only: the solver provides the common servo at each substep."""
 
     def write_position_targets(self, control, targets):
-        wp.copy(control.joint_target_pos, targets)
+        wp.copy(control.joint_target_q, targets)
 
     def apply_wrist_effort(self, state, control, targets):
         pass

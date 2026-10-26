@@ -51,7 +51,7 @@ def test_real_snack_reference_binds_named_joints_floating_root_and_palms():
         atol=1.0e-7,
     )
     free_root_target = np.broadcast_to(
-        np.asarray(builder.joint_target_pos, dtype=np.float32)[:6],
+        np.asarray(builder.joint_target_q, dtype=np.float32)[:6],
         (reference.num_frames, 6),
     )
     np.testing.assert_array_equal(binding.joint_target[:, :6], free_root_target)

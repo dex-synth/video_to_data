@@ -250,7 +250,7 @@ class G1Dex3:
             builder.joint_target_ke[dof_id] = spec.kp
             builder.joint_target_kd[dof_id] = spec.kd
             builder.joint_target_mode[dof_id] = int(newton.JointTargetMode.POSITION)
-            builder.joint_target_pos[dof_id] = spec.default_pos
+            builder.joint_target_q[dof_id] = spec.default_pos
             builder.joint_armature[dof_id] = spec.armature
             builder.joint_effort_limit[dof_id] = spec.effort_limit
             if spec.velocity_limit is not None:

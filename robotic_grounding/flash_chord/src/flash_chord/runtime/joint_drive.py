@@ -114,7 +114,7 @@ class JointPositionIntegralConfig:
 def _apply_joint_position_integral(
     joint_q: wp.array(dtype=wp.float32),
     joint_qd: wp.array(dtype=wp.float32),
-    joint_target_pos: wp.array(dtype=wp.float32),
+    joint_target_q: wp.array(dtype=wp.float32),
     joint_q_ids: wp.array(dtype=wp.int32),
     joint_dof_ids: wp.array(dtype=wp.int32),
     kp: wp.array(dtype=wp.float32),
@@ -126,13 +126,13 @@ def _apply_joint_position_integral(
     dt: float,
     gain_s_inv2: float,
     max_effort_fraction: float,
-    joint_target_vel: wp.array(dtype=wp.float32),
+    joint_target_qd: wp.array(dtype=wp.float32),
 ) -> None:
     world, joint = wp.tid()
     state_id = world * joint_dof_ids.shape[0] + joint
     q_id = world * coords_per_world + joint_q_ids[joint]
     dof_id = world * dofs_per_world + joint_dof_ids[joint]
-    error = joint_target_pos[dof_id] - joint_q[q_id]
+    error = joint_target_q[dof_id] - joint_q[q_id]
 
     nominal_effort = wp.clamp(
         kp[joint] * error - kd[joint] * joint_qd[dof_id],
@@ -151,7 +151,7 @@ def _apply_joint_position_integral(
         effort_limit[joint] - nominal_effort,
     )
     integral_velocity[state_id] = integral_effort / kd[joint]
-    joint_target_vel[dof_id] = integral_velocity[state_id]
+    joint_target_qd[dof_id] = integral_velocity[state_id]
 
 
 @wp.kernel
@@ -236,7 +236,7 @@ class JointPositionIntegral:
             inputs=[
                 state.joint_q,
                 state.joint_qd,
-                control.joint_target_pos,
+                control.joint_target_q,
                 self.joint_q_ids,
                 self.joint_dof_ids,
                 self.kp,
@@ -249,7 +249,7 @@ class JointPositionIntegral:
                 self.gain_s_inv2,
                 self.max_effort_fraction,
             ],
-            outputs=[control.joint_target_vel],
+            outputs=[control.joint_target_qd],
         )
 
     def reset(self, reset_mask: wp.array) -> None:

@@ -426,14 +426,14 @@ def test_immediate_control_writes_position_targets_without_effort_control():
         target[6:] = [100.0, 200.0]
         action.joint_target.assign(target)
         control = SimpleNamespace(
-            joint_target_pos=wp.zeros(8, dtype=wp.float32),
+            joint_target_q=wp.zeros(8, dtype=wp.float32),
             joint_f=wp.full(8, value=7.0, dtype=wp.float32),
         )
         action.prepare_control(control)
-        prepared = control.joint_target_pos.numpy().copy()
+        prepared = control.joint_target_q.numpy().copy()
         force = control.joint_f.numpy().copy()
         action.apply_control(object(), control)
-        applied = control.joint_target_pos.numpy().copy()
+        applied = control.joint_target_q.numpy().copy()
 
     np.testing.assert_allclose(prepared, target)
     np.testing.assert_allclose(applied, target)
@@ -460,15 +460,15 @@ def test_fixed_arm_delay_advances_per_physics_substep_and_leaves_other_targets_i
         assert action.delay.delayed_dof_ids == (4, 1, 0, 5)
         action.reset(wp.ones(1, dtype=wp.int32))
         control = SimpleNamespace(
-            joint_target_pos=wp.zeros(8, dtype=wp.float32),
+            joint_target_q=wp.zeros(8, dtype=wp.float32),
             joint_f=wp.full(8, value=7.0, dtype=wp.float32),
         )
         action.process(wp.zeros(6, dtype=wp.float32), wp.array([0], dtype=wp.int32))
         action.joint_target.assign(target_a)
         action.prepare_control(control)
-        np.testing.assert_allclose(control.joint_target_pos.numpy(), 0.0)
+        np.testing.assert_allclose(control.joint_target_q.numpy(), 0.0)
         action.apply_control(None, control)
-        np.testing.assert_allclose(control.joint_target_pos.numpy(), target_a)
+        np.testing.assert_allclose(control.joint_target_q.numpy(), target_a)
 
         action.process(wp.zeros(6, dtype=wp.float32), wp.array([1], dtype=wp.int32))
         immediate_processed = action.processed_target.numpy().copy()
@@ -476,7 +476,7 @@ def test_fixed_arm_delay_advances_per_physics_substep_and_leaves_other_targets_i
         outputs = []
         for _ in range(5):
             action.apply_control(None, control)
-            outputs.append(control.joint_target_pos.numpy().copy())
+            outputs.append(control.joint_target_q.numpy().copy())
         outputs = np.stack(outputs)
 
     np.testing.assert_allclose(immediate_processed, target_b[[4, 1, 3, 0, 5, 2]])

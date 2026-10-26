@@ -84,8 +84,8 @@ def _object_control(
     gravity: float,
     mass_normalized_gains: bool,
     body_f: wp.array[wp.spatial_vector],
-    joint_target_pos: wp.array[wp.float32],
-    joint_target_vel: wp.array[wp.float32],
+    joint_target_q: wp.array[wp.float32],
+    joint_target_qd: wp.array[wp.float32],
 ) -> None:
     i = wp.tid()
     if i < object_count:
@@ -137,8 +137,8 @@ def _object_control(
         world = i // articulations_per_world
         articulation = i - world * articulations_per_world
         dof_id = world * num_joint_dof + articulation_dof_ids[articulation]
-        joint_target_pos[dof_id] = articulation_target_pos[i]
-        joint_target_vel[dof_id] = 0.0
+        joint_target_q[dof_id] = articulation_target_pos[i]
+        joint_target_qd[dof_id] = 0.0
 
 
 def apply_object_control(model, state, control, command, scale, params=None):
@@ -187,5 +187,5 @@ def apply_object_control(model, state, control, command, scale, params=None):
             p.gravity,
             p.mass_normalized_gains,
         ],
-        outputs=[state.body_f, control.joint_target_pos, control.joint_target_vel],
+        outputs=[state.body_f, control.joint_target_q, control.joint_target_qd],
     )

@@ -200,8 +200,8 @@ def test_voc_uses_each_objects_total_mass_and_root_origin_velocity():
             body_f=wp.zeros(3, dtype=wp.spatial_vector),
         )
         control = SimpleNamespace(
-            joint_target_pos=wp.zeros(0, dtype=wp.float32),
-            joint_target_vel=wp.zeros(0, dtype=wp.float32),
+            joint_target_q=wp.zeros(0, dtype=wp.float32),
+            joint_target_qd=wp.zeros(0, dtype=wp.float32),
         )
         command = _command(
             world_count=1,
@@ -249,8 +249,8 @@ def test_voc_direct_gain_mode_matches_force_torque_controller_units():
             body_f=wp.zeros(1, dtype=wp.spatial_vector),
         )
         control = SimpleNamespace(
-            joint_target_pos=wp.zeros(0, dtype=wp.float32),
-            joint_target_vel=wp.zeros(0, dtype=wp.float32),
+            joint_target_q=wp.zeros(0, dtype=wp.float32),
+            joint_target_qd=wp.zeros(0, dtype=wp.float32),
         )
         command = _command(
             world_count=1,
@@ -305,8 +305,8 @@ def test_articulation_voc_writes_targets_and_updates_a_captured_graph():
             body_f=wp.zeros(0, dtype=wp.spatial_vector),
         )
         control = SimpleNamespace(
-            joint_target_pos=wp.full(world_count * num_joint_dof, value=7.0, dtype=wp.float32),
-            joint_target_vel=wp.full(world_count * num_joint_dof, value=-7.0, dtype=wp.float32),
+            joint_target_q=wp.full(world_count * num_joint_dof, value=7.0, dtype=wp.float32),
+            joint_target_qd=wp.full(world_count * num_joint_dof, value=-7.0, dtype=wp.float32),
         )
         command = _command(
             world_count=world_count,
@@ -319,16 +319,16 @@ def test_articulation_voc_writes_targets_and_updates_a_captured_graph():
         scale = wp.array([0.0, 0.25, 1.0, 1.0], dtype=wp.float32)
 
         apply_object_control(model, state, control, command, scale=scale)
-        target_pos = control.joint_target_pos.numpy().reshape(world_count, num_joint_dof)
-        target_vel = control.joint_target_vel.numpy().reshape(world_count, num_joint_dof)
+        target_pos = control.joint_target_q.numpy().reshape(world_count, num_joint_dof)
+        target_vel = control.joint_target_qd.numpy().reshape(world_count, num_joint_dof)
 
         with wp.ScopedCapture("cuda:0") as capture:
             apply_object_control(model, state, control, command, scale=scale)
         updated_targets = targets + 0.5
         command.articulation_target_pos.assign(updated_targets)
         wp.capture_launch(capture.graph)
-        captured_pos = control.joint_target_pos.numpy().reshape(world_count, num_joint_dof)
-        captured_vel = control.joint_target_vel.numpy().reshape(world_count, num_joint_dof)
+        captured_pos = control.joint_target_q.numpy().reshape(world_count, num_joint_dof)
+        captured_vel = control.joint_target_qd.numpy().reshape(world_count, num_joint_dof)
 
     np.testing.assert_array_equal(target_pos[:, 0], 7.0)
     np.testing.assert_array_equal(target_pos[:, 1:], targets.reshape(world_count, 2))

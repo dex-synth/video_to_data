@@ -178,39 +178,21 @@ def _validate_component_bindings(
     else:
         if support.body_id >= bodies_per_world or support.body_id in simulation_body_ids:
             raise ValueError(f"support body ID {support.body_id} is invalid or overlaps an object body")
-        support_q_ids = set(support.free_q_ids)
-        support_dof_ids = set(support.free_dof_ids)
-        invalid_support_q = tuple(q_id for q_id in support.free_q_ids if not robot_q_count <= q_id < q_per_world)
-        invalid_support_dof = tuple(
-            dof_id for dof_id in support.free_dof_ids if not robot_dof_count <= dof_id < dof_per_world
-        )
-        if invalid_support_q or object_q_ids.intersection(support_q_ids):
-            raise ValueError(
-                f"support has invalid or overlapping q IDs: invalid={invalid_support_q}, "
-                f"overlap={tuple(sorted(object_q_ids.intersection(support_q_ids)))}"
-            )
-        if invalid_support_dof or object_dof_ids.intersection(support_dof_ids):
-            raise ValueError(
-                f"support has invalid or overlapping DOF IDs: invalid={invalid_support_dof}, "
-                f"overlap={tuple(sorted(object_dof_ids.intersection(support_dof_ids)))}"
-            )
         if support.shapes != support_shapes:
             raise ValueError(
                 f"support binding shapes {support.shapes} do not match collision ownership {support_shapes}"
             )
-        object_q_ids.update(support_q_ids)
-        object_dof_ids.update(support_dof_ids)
     expected_q_ids = set(range(robot_q_count, q_per_world))
     if object_q_ids != expected_q_ids:
         raise ValueError(
-            "scene object/support bindings must cover every post-robot q coordinate exactly; "
+            "scene object bindings must cover every post-robot q coordinate exactly; "
             f"missing={tuple(sorted(expected_q_ids - object_q_ids))}, "
             f"extra={tuple(sorted(object_q_ids - expected_q_ids))}"
         )
     expected_dof_ids = set(range(robot_dof_count, dof_per_world))
     if object_dof_ids != expected_dof_ids:
         raise ValueError(
-            "scene object/support bindings must cover every post-robot DOF exactly; "
+            "scene object bindings must cover every post-robot DOF exactly; "
             f"missing={tuple(sorted(expected_dof_ids - object_dof_ids))}, "
             f"extra={tuple(sorted(object_dof_ids - expected_dof_ids))}"
         )

@@ -57,6 +57,9 @@ def build_h2r_scene(reference, embodiment, world_count, collision):
     if timeconst <= 0 or ratio <= 0:
         raise ValueError("H2R currently supports positive MuJoCo contact timeconst/dampratio")
     for shape in range(builder.shape_count):
+        # Newton's defaults need not match the authored common contact envelope.
+        builder.shape_margin[shape] = contact["margin_m"]
+        builder.shape_gap[shape] = contact["gap_m"]
         for field, value in (
             ("mu", contact["friction"][0]),
             ("mu_torsional", contact["friction"][1]),
@@ -66,6 +69,8 @@ def build_h2r_scene(reference, embodiment, world_count, collision):
         ):
             getattr(builder, "shape_material_" + field)[shape] = value
         builder.custom_attributes["mujoco:condim"].values[shape] = contact["condim"]
+        builder.custom_attributes["mujoco:solref"].values[shape] = tuple(contact["solref"])
+        builder.custom_attributes["mujoco:solref_mode"].values[shape] = 1  # Raw MuJoCo parameters in Newton 1.5.
         builder.custom_attributes["mujoco:geom_solimp"].values[shape] = tuple(contact["solimp"])
         builder.custom_attributes["mujoco:geom_priority"].values[shape] = 0
         builder.custom_attributes["mujoco:geom_solmix"].values[shape] = 1.0

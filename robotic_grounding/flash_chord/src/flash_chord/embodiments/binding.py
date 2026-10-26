@@ -268,13 +268,13 @@ def build_named_joint_trajectory(
     if missing or unexpected:
         raise ValueError(f"named robot joint mismatch: missing={missing}, unexpected={unexpected}")
     source_joint_pos = _trajectory(source_joint_pos, "source_joint_pos", len(source_names))
-    if len(builder.joint_q) != layout.num_joint_q or len(builder.joint_target_pos) != layout.num_joint_dof:
+    if len(builder.joint_q) != layout.num_joint_q or len(builder.joint_target_q) != layout.num_joint_dof:
         raise ValueError("binding builder defaults do not match the embodiment layout")
 
     source_index = {name: index for index, name in enumerate(source_names)}
     joint_q = np.tile(np.asarray(builder.joint_q, dtype=np.float32), (source_joint_pos.shape[0], 1))
     joint_target = np.tile(
-        np.asarray(builder.joint_target_pos, dtype=np.float32),
+        np.asarray(builder.joint_target_q, dtype=np.float32),
         (source_joint_pos.shape[0], 1),
     )
     for q_id, dof_id, name in expected:

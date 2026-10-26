@@ -183,7 +183,7 @@ class SharpaHands:
                     builder.joint_velocity_limit[dof] = spec.velocity_limit
                 if spec.friction is not None:
                     builder.joint_friction[dof] = spec.friction
-                builder.joint_target_pos[dof] = spec.default_pos
+                builder.joint_target_q[dof] = spec.default_pos
             if not is_ball:  # seed initial joint_q for single-coord joints
                 for k in range(n):
                     builder.joint_q[q_start + k] = spec.default_pos
@@ -293,7 +293,7 @@ class SharpaHands:
             raise TypeError("SharpaHands requires a HandPoseReference")
         joint_q = np.tile(np.asarray(builder.joint_q, dtype=np.float32), (reference.num_frames, 1))
         joint_target = np.tile(
-            np.asarray(builder.joint_target_pos, dtype=np.float32),
+            np.asarray(builder.joint_target_q, dtype=np.float32),
             (reference.num_frames, 1),
         )
         for hand in layout.hands:

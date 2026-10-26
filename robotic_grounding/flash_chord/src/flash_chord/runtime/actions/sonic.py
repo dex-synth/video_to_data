@@ -674,7 +674,7 @@ class SonicJointResidualAction:
         if invalid:
             raise ValueError(f"SONIC requires position-capable scalar joint drives, got {invalid}")
 
-        model_default = np.asarray(scene.model.joint_target_pos.numpy(), dtype=np.float32)[:dof_per_world]
+        model_default = np.asarray(scene.model.joint_target_q.numpy(), dtype=np.float32)[:dof_per_world]
         model_stiffness = np.asarray(scene.model.joint_target_ke.numpy(), dtype=np.float32)[:dof_per_world]
         model_effort = np.asarray(scene.model.joint_effort_limit.numpy(), dtype=np.float32)[:dof_per_world]
         sonic_stiffness = model_stiffness[list(sonic_dof_ids)]
@@ -935,11 +935,11 @@ class SonicJointResidualAction:
         self.reference_joint_q_offset = offset
 
     def prepare_control(self, control) -> None:
-        wp.copy(control.joint_target_pos, self.joint_target)
+        wp.copy(control.joint_target_q, self.joint_target)
 
     def apply_control(self, state, control) -> None:
         for delay in self.delays:
-            delay.advance_into(self.joint_target, control.joint_target_pos)
+            delay.advance_into(self.joint_target, control.joint_target_q)
 
     def reset(self, reset_mask: wp.array) -> None:
         wp.launch(

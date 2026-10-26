@@ -416,11 +416,11 @@ class ResidualJointPositionAction:
 
     def prepare_control(self, control) -> None:
         if self.delay is None:
-            wp.copy(control.joint_target_pos, self.joint_target)
+            wp.copy(control.joint_target_q, self.joint_target)
 
     def apply_control(self, state, control) -> None:
         if self.delay is not None:
-            wp.copy(control.joint_target_pos, self.delay.advance(self.joint_target))
+            wp.copy(control.joint_target_q, self.delay.advance(self.joint_target))
 
     def reset(self, reset_mask: wp.array) -> None:
         wp.launch(

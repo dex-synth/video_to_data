@@ -34,8 +34,7 @@ def test_support_surfaces_added():
         binding = add_support_surfaces(builder, support)
         builder.finalize()
     assert binding.body_id == 0
-    assert binding.free_q_ids == tuple(range(7))
-    assert binding.free_dof_ids == tuple(range(6))
+    assert builder.joint_coord_count == builder.joint_dof_count == 0
     assert tuple(binding.shapes.ids()) == (0, 1)  # hot3d support = two cylinder pads
 
 
@@ -84,6 +83,8 @@ def Cube "tabletop"
 
     assert binding is not None
     assert tuple(float(value) for value in builder.shape_scale[0]) == pytest.approx((0.42, 0.141, 0.005))
+    assert builder.joint_coord_count == builder.joint_dof_count == 0
+    assert builder.joint_type == [newton.JointType.FIXED]
 
 
 @pytest.mark.sequence_data

@@ -73,6 +73,7 @@ def build_solver(model, cfg: SimConfig):
             ls_iterations=settings["ls_iterations"],
             tolerance=settings["tolerance"],
             use_mujoco_contacts=True,
+            enable_multiccd=True,
         )
         restore_joint_force_limits(solver, model.h2r_binding_path)
         validate_solver(solver, model.h2r_binding_path)
@@ -88,6 +89,7 @@ def build_solver(model, cfg: SimConfig):
         iterations=cfg.iterations,
         ls_iterations=cfg.ls_iterations,
         use_mujoco_contacts=cfg.use_mujoco_contacts,
+        enable_multiccd=True,
     )
 
 

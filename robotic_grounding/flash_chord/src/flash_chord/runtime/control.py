@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Wrist tracking control for floating-hand embodiments.
 
-Prismatic + finger joints are position-controlled via ``control.joint_target_pos``; the ball wrist
+Prismatic + finger joints are position-controlled via ``control.joint_target_q``; the ball wrist
 joint is effort-controlled by :func:`control_wrist_orientation` (proportional torque toward a target
 rotation vector; velocity damping is implicit via ``mujoco:dof_passive_damping``).
 """
@@ -89,7 +89,7 @@ class WristController:
         """Route ``targets`` into the solver's position-target buffer (prismatic + finger; the ball
         rotvec slot is ignored by the solver since the ball is effort-controlled). Call once per
         control frame. ``targets`` is the per-world DOF target vector (world_count * num_joint_dof)."""
-        wp.copy(control.joint_target_pos, targets)
+        wp.copy(control.joint_target_q, targets)
 
     def apply_wrist_effort(self, state, control, targets: wp.array) -> None:
         """Launch the ball-joint effort PD toward each wrist's target rotvec (read from ``targets``

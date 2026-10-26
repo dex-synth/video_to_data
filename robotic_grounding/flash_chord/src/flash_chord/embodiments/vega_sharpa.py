@@ -239,7 +239,7 @@ class VegaSharpa:
                 builder.joint_target_ke[dof] = feedback_scale * spec.kp
                 builder.joint_target_kd[dof] = feedback_scale * spec.kd
                 builder.joint_target_mode[dof] = int(newton.JointTargetMode.POSITION_VELOCITY)
-                builder.joint_target_pos[dof] = spec.default_pos
+                builder.joint_target_q[dof] = spec.default_pos
                 builder.joint_armature[dof] = spec.armature
                 builder.joint_effort_limit[dof] = spec.effort_limit
                 if spec.velocity_limit is not None:

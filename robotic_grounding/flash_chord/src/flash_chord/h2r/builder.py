@@ -9,11 +9,11 @@ import numpy as np
 
 class CommonModelBuilder(newton.ModelBuilder):
     def __init__(self, gravity):
-        super().__init__(gravity=gravity)
+        super().__init__(gravity=(0.0, 0.0, gravity))
         self.balance_inertia = False
 
     def finalize(self, *args, **kwargs):
-        # Newton 1.2 adds ~1e-6 to eigenvalues below 1e-10, including the
+        # Newton adds ~1e-6 to eigenvalues below 1e-10, including the
         # common virtual-wrist links (2e-12). They are valid MuJoCo inertias.
         # Preserve them locally; do not change Newton or the common asset.
         tensor = np.asarray(self.body_inertia, dtype=np.float64).reshape(-1, 3, 3)
