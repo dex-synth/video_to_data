@@ -85,6 +85,8 @@ H2R 训练配方设置 `sim.njmax=1024`，为共同机器人与详细物体碰�
 
 每次创建 solver 都检查最终 MuJoCo 模型的关节、质量、COM、惯量、重力补偿、位置驱动 gain／bias／限幅、接触参数、碰撞凸包、有效碰撞配对和桌面尺寸；额外核验动态自由度、固定支撑、物理开关，以及实际 GPU 模型的 armature、meaninertia 和接触参数。错误在训练前抛出；这些检查不宣称 MuJoCo CPU 与 MuJoCo-Warp 长时闭环轨迹完全相同。
 
+环境 reset 在恢复参考状态后，按 world 调用 Newton solver reset，保留参考 q/qvel 并清理 warmstart、外力和 actuator 缓存；接触观测也按 world 清空。ReplayRunner 同样清理 solver 历史。以上操作支持捕获进 CUDA graph，不影响未选中的 world。`evaluation.deterministic=true` 只选择确定性 actor，默认 MuJoCo-Warp 的并行浮点归约与接触排列仍不保证多圈或独立进程逐位相同；不能据此将 viewer 第一圈当作完整重复性验证。
+
 旧 checkpoint 的网络仍可加载，但修正桌面、MultiCCD 和依赖版本会改变原生训练／rollout 物理。旧产物不应标为已在当前物理条件训练；重新运行和训练须另存输出，不能覆盖旧结果。
 
 ## 本地检查

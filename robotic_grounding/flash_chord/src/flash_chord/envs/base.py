@@ -67,6 +67,15 @@ def finish_transition(
 
 
 @wp.kernel
+def solver_reset_mask(
+    selected: wp.array(dtype=wp.int32),
+    mask: wp.array(dtype=wp.bool),
+):
+    world = wp.tid()
+    mask[world] = selected[world] != 0
+
+
+@wp.kernel
 def reset_env_state(
     reset_mask: wp.array(dtype=wp.int32),
     reset_frame: wp.array(dtype=wp.int32),
@@ -234,6 +243,8 @@ class BaseEnv:
             raise TypeError("objective must implement the Objective protocol")
         self.objective = objective
         self.reset_table = ReferenceResetTable.build(scene, reference, device=self.device)
+        # Newton includes a final mask entry for global world -1; keep it false.
+        self._solver_reset_mask = wp.zeros(self.world_count + 1, dtype=wp.bool, device=self.device)
 
         self.terminated = self.termination.terminated
         self.truncated = self.termination.truncated
@@ -268,6 +279,18 @@ class BaseEnv:
             finger_scale=finger_scale,
             reference_joint_q_offset=self.reference_joint_q_offset,
         )
+        wp.launch(
+            solver_reset_mask,
+            dim=self.world_count,
+            inputs=[reset_mask],
+            outputs=[self._solver_reset_mask],
+            device=self.device,
+        )
+        # Keep the reference pose above, but discard the previous episode's
+        # warmstart, actuator state and external-force buffers.
+        self.solver.reset(self.state_0, world_mask=self._solver_reset_mask, flags=0)
+        if self.contact is not None:
+            self.contact.reset(reset_mask)
         self.action.reset(reset_mask)
         if self.arm_position_integral is not None:
             self.arm_position_integral.reset(reset_mask)

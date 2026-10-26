@@ -113,6 +113,7 @@ class ReplayRunner:
     def reset(self, frame_id: int = 0) -> None:
         """Snap the scene to ``reference`` frame ``frame_id`` (robot + objects) via the reset [WK]."""
         reset_worlds(self.model, self.reset_table, self.state_0, frame_id=frame_id)
+        self.solver.reset(self.state_0, flags=0)
         self.action.reset(self.reset_table.all_reset_mask)
         self.timestep.assign(np.full(self.world_count, frame_id, dtype=np.int32))
         self.sim_time = 0.0

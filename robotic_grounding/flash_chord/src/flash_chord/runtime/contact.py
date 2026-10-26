@@ -238,6 +238,30 @@ def clear_contact_slots(
 
 
 @wp.kernel
+def reset_contact_slots(
+    reset_mask: wp.array(dtype=wp.int32),
+    slots_per_world: int,
+    contact_pos_w: wp.array(dtype=wp.vec3),
+    contact_force_w: wp.array(dtype=wp.vec3),
+    contact_pos_b: wp.array(dtype=wp.vec3),
+    contact_force_direction_b: wp.array(dtype=wp.vec3),
+    contact_pos_o: wp.array(dtype=wp.vec3),
+    contact_force_direction_o: wp.array(dtype=wp.vec3),
+    contact_active: wp.array(dtype=wp.int32),
+):
+    slot = wp.tid()
+    if reset_mask[slot // slots_per_world] == 0:
+        return
+    contact_pos_w[slot] = wp.vec3(0.0)
+    contact_force_w[slot] = wp.vec3(0.0)
+    contact_pos_b[slot] = wp.vec3(0.0)
+    contact_force_direction_b[slot] = wp.vec3(0.0)
+    contact_pos_o[slot] = wp.vec3(0.0)
+    contact_force_direction_o[slot] = wp.vec3(0.0)
+    contact_active[slot] = 0
+
+
+@wp.kernel
 def aggregate_hand_object_contacts(
     contact_count: wp.array(dtype=wp.int32),
     contact_shape0: wp.array(dtype=wp.int32),
@@ -474,6 +498,27 @@ class ContactTracker:
                 device=device,
             ),
         )
+
+    def reset(self, reset_mask: wp.array) -> None:
+        """Clear selected worlds' observations until their first physical solve.
+
+        Aggregation scratch buffers are cleared by update(); they are not
+        observations and must never be reused as measurements after a reset.
+        """
+        slots = self.world_count * self.layout.slots_per_world
+        if slots:
+            wp.launch(
+                reset_contact_slots,
+                dim=slots,
+                inputs=[reset_mask, self.layout.slots_per_world],
+                outputs=[
+                    self.contact_pos_w, self.contact_force_w,
+                    self.contact_pos_b, self.contact_force_direction_b,
+                    self.contact_pos_o, self.contact_force_direction_o,
+                    self.contact_active,
+                ],
+                device=self.contact_pos_w.device,
+            )
 
     def update(self, model, state, contacts) -> None:
         """Aggregate current MuJoCo contacts into persistent fixed slots."""

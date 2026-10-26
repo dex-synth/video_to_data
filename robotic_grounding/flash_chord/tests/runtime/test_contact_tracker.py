@@ -65,6 +65,32 @@ def _contacts(shape0, shape1, point0, point1, force0):
     )
 
 
+def test_reset_clears_only_selected_world_contact_observations():
+    import warp as wp
+
+    with wp.ScopedDevice("cuda:0"):
+        tracker = _tracker(world_count=2)
+        fields = (
+            "contact_pos_w", "contact_force_w", "contact_pos_b",
+            "contact_force_direction_b", "contact_pos_o",
+            "contact_force_direction_o", "contact_active",
+        )
+        for name in fields:
+            getattr(tracker, name).fill_(1)
+        mask = wp.array([1, 0], dtype=wp.int32)
+        with wp.ScopedCapture() as capture:
+            tracker.reset(mask)
+        wp.capture_launch(capture.graph)
+        for name in fields:
+            values = getattr(tracker, name).numpy()
+            np.testing.assert_array_equal(values[:2], 0)
+            np.testing.assert_array_equal(values[2:], 1)
+        mask.assign([0, 1])
+        wp.capture_launch(capture.graph)
+        for name in fields:
+            np.testing.assert_array_equal(getattr(tracker, name).numpy(), 0)
+
+
 def test_shape_ordering_produces_the_same_object_contact():
     import warp as wp
 

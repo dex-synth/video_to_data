@@ -65,6 +65,8 @@ def test_fixed_support_and_active_solver_guards(physics):
 
 
 def test_same_initial_state_and_targets_in_common_physics(physics):
+    import mujoco_warp as mjwarp
+
     env, common, _ = physics
     env.reset(frame_id=0)
     data = mujoco.MjData(common)
@@ -80,16 +82,33 @@ def test_same_initial_state_and_targets_in_common_physics(physics):
     data.qpos[root + 3:root + 7] = env.reference.object_body_quat_w()[0, 0].astype(np.float32)
     data.qpos[int(common.joint("object_hinge").qposadr[0])] = np.float32(env.reference.object_articulation()[0, 0])
     mujoco.mj_forward(common, data)
+    # Both worlds use the same physics backend. CPU MuJoCo is used below
+    # only to inspect post-integration kinematics, never to advance physics.
+    gpu_model = mjwarp.put_model(common)
+    gpu_data = mjwarp.put_data(common, data, nworld=1, nconmax=1024, njmax=4096)
     contacts_seen = 0
     position_errors, rotation_errors = [], []
     for step in range(4):
         action = wp.array(np.full(env.action.action_dim, 0.1 * (-1) ** step, np.float32), device=env.device)
         env.step(action)
+        if step == 0:
+            from flash_chord.h2r.validation import named_id
+
+            # VOC=0 must also disable the method's implicit hinge servos.
+            native = env.solver.mj_model
+            hinge = named_id(native, "joint", "object_hinge")
+            assist = np.flatnonzero(native.actuator_trnid[:, 0] == hinge)
+            assert len(assist) > 0
+            for field in ("actuator_gainprm", "actuator_biasprm"):
+                np.testing.assert_array_equal(getattr(env.solver.mjw_model, field).numpy()[:, assist], 0)
         targets = env.action.joint_target.numpy()[list(layout.dof_ids)]
         data.ctrl[actuator_ids] = targets
+        gpu_data.ctrl.assign(data.ctrl[None, :].astype(np.float32))
         for _ in range(env.config.sim.substeps):
-            mujoco.mj_step(common, data)
-            contacts_seen += data.ncon
+            mjwarp.step(gpu_model, gpu_data)
+            contacts_seen += int(gpu_data.nacon.numpy()[0])
+        data.qpos[:] = gpu_data.qpos.numpy()[0]
+        data.qvel[:] = gpu_data.qvel.numpy()[0]
         np.testing.assert_allclose(env.state_0.joint_q.numpy()[list(layout.q_ids)], data.qpos[q_ids], atol=2e-5, rtol=0)
         np.testing.assert_allclose(env.state_0.joint_qd.numpy()[list(layout.dof_ids)], data.qvel[dof_ids], atol=2e-3, rtol=0)
         # Refresh post-integration poses without advancing either world.
@@ -105,3 +124,42 @@ def test_same_initial_state_and_targets_in_common_physics(physics):
     # manifolds. Bound short-horizon motion independently of the tight servo check.
     assert max(position_errors) < 1e-3  # 1 mm over 16 physics steps
     assert max(rotation_errors) < 5e-3  # 0.29 degrees
+
+
+def test_masked_reset_discards_solver_and_contact_history(physics):
+    """A captured reset must recover poisoned worlds without resetting peers."""
+    from dataclasses import replace
+
+    original, _, binding = physics
+    with wp.ScopedDevice("cuda:0"):
+        scene = build_h2r_scene(original.reference, H2rSharpaHands(binding), 2,
+                               CollisionPolicy(ground=False))
+        env = RLEnv(scene, original.reference, replace(original.config, auto_reset=False))
+        env.reset(frame_id=0)
+        initial_q = env.state_0.joint_q.numpy().copy()
+        initial_obs = env.observation_strategy.compute(env.state_0).numpy().copy()
+        data = env.solver.mjw_data
+        buffers = (data.qacc_warmstart, data.qfrc_applied, data.xfrc_applied, data.ctrl)
+        for buffer in buffers:
+            buffer.fill_(float("nan"))
+        env.contact.contact_pos_b.fill_(1)
+        env.contact.contact_force_direction_b.fill_(1)
+        mask = wp.array([1, 0], dtype=wp.int32)
+        frame = wp.zeros(2, dtype=wp.int32)
+        with wp.ScopedCapture() as capture:
+            env.reset(reset_frame=frame, reset_mask=mask)
+        wp.capture_launch(capture.graph)
+        for buffer in buffers:
+            values = buffer.numpy()
+            np.testing.assert_array_equal(values[0], 0)
+            assert np.isnan(values[1]).all()
+        obs = env.observation_strategy.compute(env.state_0).numpy()
+        np.testing.assert_array_equal(obs[:env.observation_dim], initial_obs[:env.observation_dim])
+        slots = env.contact.layout.slots_per_world
+        np.testing.assert_array_equal(env.contact.contact_pos_b.numpy()[:slots], 0)
+        np.testing.assert_array_equal(env.contact.contact_pos_b.numpy()[slots:], 1)
+        np.testing.assert_array_equal(env.state_0.joint_q.numpy(), initial_q)
+        mask.assign([0, 1])
+        wp.capture_launch(capture.graph)
+        env.step(wp.zeros(2 * env.action.action_dim, dtype=wp.float32))
+        assert np.isfinite(env.state_0.joint_q.numpy()).all()
