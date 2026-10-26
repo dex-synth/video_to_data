@@ -93,3 +93,32 @@ FLASHCHORD_H2R_BINDING="$PREPARED/h2r_binding.json" \
 ```
 
 无准备产物时集成检查显式 skip。GPU 检查覆盖原生 processed action／正则化一致性、共同 FK、零额外腕力矩和短物理 rollout；独立腕转换检查同时覆盖 CPU 与 GPU。输入集合验收应对每个实际共同包执行准备和模型检查，不能从 box 的训练 smoke 推导其他序列的训练性能。
+
+## 共同物理评估部署
+
+Bench 用此次训练绑定的共同 human／scene 与 robot 包执行 `prepare-evaluation --contacts`，准备 metric spec 后启动 UniSim MuJoCo evaluator。方法在自己的环境启动常驻客户端：
+
+```bash
+"$FLASH_PY" -m flash_chord.h2r.evaluation \
+  --socket /path/to/eval.sock --checkpoint /path/to/policy.safetensors \
+  --prepared "$PREPARED" --output /path/to/new-controller-output
+```
+
+`h2r/controller.py` 复用原生 `PolicyObservation`、`ContactTracker`、FlashSAC actor loader 与 `H2rHandPoseAction`。它只建立方法几何与数值 buffer，不创建 solver、VOC、reward 或自动 reset 环境；反馈全部来自 evaluator。任务绑定、完整关节名字、30 Hz／120 Hz 时钟、checkpoint schema 和准备产物逐项核对。当前 checkpoint 的 metadata 引用了训练 prepared 的路径，该路径也必须可读且与部署 prepared 的完整 binding 一致；不能给旧 checkpoint 任意换参考包。
+
+接触使用 `h2r-body-contacts-v1`：最后求解时刻的 body-local 两侧表面点、具名两侧 body，以及作用在第二侧的世界系力。方法恢复原生 shape→link 映射，使用当前真实 body pose 和原生内核进行聚合；零力不等于没有接触。首帧接触特征置零沿用原生规则，后续缺失接触会报错。Bench 的 body 原点速度须先加上 `ω × R(body_com)`，恢复 Newton FK 的质心速度，再送入训练时的原生观测内核；不能直接复制这两个不同参考点的线速度，也不在部署时修改原生观测算法。
+
+策略与原生观测／动作 buffer 保留 CUDA 运算和 checkpoint 的计算 dtype。入口在 JAX 初始化前设置 `--xla_gpu_deterministic_ops=true --xla_gpu_autotune_level=0`，每次 actor 推理固定为一个 episode，避免独立进程 autotuning 或评估批量改变浮点计算路径；冲突的 XLA 设置明确拒绝。`--device` 默认 `cuda:0`，物理 evaluator 的 MuJoCo CPU 与方法的 CUDA 推理是独立选择。EMA、原生残差旋转组合、历史及连续腕分支均保留；不附加目标机械限位裁剪。当前入口要求零 delay、无 arm integral、无额外方法速度限制的 H2R 配方。
+
+每个 episode 仅提交一次首帧具名机器人初态，后续 tick 每四个物理步更新；终态不再产生动作。控制器输出目录保存 checkpoint hash、配置、输入绑定、XLA flags、观测／动作／目标及耗时，成绩与 physical rollout 由 bench 记录。不同训练输入或 backend 必须另做验证；此入口不保证任务成功。
+
+部署一致性检查需要 checkpoint、binding 和 evaluator `hello` 的封存 JSON：
+
+```bash
+FLASHCHORD_H2R_CHECKPOINT=/path/to/policy.safetensors \
+FLASHCHORD_H2R_BINDING="$PREPARED/h2r_binding.json" \
+FLASHCHORD_H2R_HELLO=/path/to/hello.json \
+  "$FLASH_PY" -m pytest -q -s tests/test_h2r_evaluation.py
+```
+
+该检查使用原生 GPU 环境的连续真实状态与接触，显式转换质心／原点速度，并打乱关节顺序、交换接触两侧，比较观测、actor、历史与最终控制。运行报告放在各自输出目录，不将训练日志或原生 viewer 的重播当作共同成绩。
