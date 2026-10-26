@@ -55,6 +55,28 @@ class SimConfig:
 
 def build_solver(model, cfg: SimConfig):
     """Construct the MuJoCo-Warp solver (Newton ``SolverMuJoCo``) for ``model`` from ``cfg``."""
+    settings = getattr(model, "h2r_settings", None)
+    if settings is not None:
+        from flash_chord.h2r.validation import restore_joint_force_limits, validate_solver
+
+        if abs(cfg.sim_dt - settings["timestep_s"]) > 1e-12 or cfg.fps != 30 or not cfg.use_mujoco_contacts:
+            raise ValueError("H2R requires 30 Hz control, its exact physical timestep and MuJoCo contacts")
+        solver = newton.solvers.SolverMuJoCo(
+            model,
+            njmax=cfg.njmax,
+            nconmax=cfg.nconmax,
+            solver=settings["solver"].lower(),
+            integrator=settings["integrator"].lower(),
+            cone=settings["cone"].lower(),
+            impratio=settings["impratio"],
+            iterations=settings["iterations"],
+            ls_iterations=settings["ls_iterations"],
+            tolerance=settings["tolerance"],
+            use_mujoco_contacts=True,
+        )
+        restore_joint_force_limits(solver, model.h2r_binding_path)
+        validate_solver(solver, model.h2r_binding_path)
+        return solver
     return newton.solvers.SolverMuJoCo(
         model,
         solver=cfg.solver,

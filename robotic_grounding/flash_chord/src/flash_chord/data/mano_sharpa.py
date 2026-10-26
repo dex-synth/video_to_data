@@ -162,6 +162,8 @@ def load_mano_sharpa(
     parquet_path: str,
     control_fps: float | None = None,
     motion_speed: float = 1.0,
+    *,
+    object_assets: tuple[ObjectAssetSpec, ...] | None = None,
 ) -> ManoSharpaReference:
     """Load a ManoSharpa parquet and optionally resample it for control-rate playback.
 
@@ -222,14 +224,18 @@ def load_mano_sharpa(
             )
         art = np.zeros((num_frames, 0), dtype=art.dtype)
     source_dataset = _optional_string(cells.get("source_dataset")) or _dataset_from_path(row.path)
-    object_assets = resolve_object_asset_specs(
-        source_dataset=source_dataset,
-        object_name=object_name,
-        body_names=object_body_names,
-        mesh_paths=object_mesh_paths,
-        urdf_paths=object_urdf_paths,
-        num_articulations=art.shape[1],
-        reference_path=row.path,
+    object_assets = (
+        object_assets
+        if object_assets is not None
+        else resolve_object_asset_specs(
+            source_dataset=source_dataset,
+            object_name=object_name,
+            body_names=object_body_names,
+            mesh_paths=object_mesh_paths,
+            urdf_paths=object_urdf_paths,
+            num_articulations=art.shape[1],
+            reference_path=row.path,
+        )
     )
 
     t_src, t_tgt = (

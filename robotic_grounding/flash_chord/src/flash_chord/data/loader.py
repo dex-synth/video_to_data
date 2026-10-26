@@ -49,6 +49,10 @@ def load_reference(
     source_frame_playback: bool = False,
 ) -> Reference:
     """Load a declared schema or the current unversioned ``ManoSharpaData`` format."""
+    if Path(parquet_path).name == "h2r_binding.json":
+        from flash_chord.h2r.reference import load_h2r
+
+        return load_h2r(parquet_path, control_fps, motion_speed, source_frame_playback)
     row = read_parquet_row(parquet_path, columns=_DISPATCH_COLUMNS)
     schema_version = row.cells.get("schema_version")
     if schema_version == "motion_v1":

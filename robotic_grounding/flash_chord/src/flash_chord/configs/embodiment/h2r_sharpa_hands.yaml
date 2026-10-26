@@ -1,0 +1,2 @@
+_target_: flash_chord.h2r.robot.H2rSharpaHands
+binding_path: ${task.parquet}

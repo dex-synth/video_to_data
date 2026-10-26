@@ -64,6 +64,8 @@ Change `markers.enabled=false` to `markers.enabled=true` in replay/policy comman
 
 ## Example data
 
+For h2r_bench human/scene bundles and the common bimanual Sharpa Wave robot, use the separate [H2R input recipe](docs/h2r_inputs.md). It prepares native features and IK from the common assets and uses scalar virtual wrists at 30 Hz.
+
 Both examples ship under the sibling `source/robotic_grounding/robotic_grounding/assets` tree, mounted read-only at `/v2d/assets`:
 
 ```text

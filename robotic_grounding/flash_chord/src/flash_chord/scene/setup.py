@@ -58,6 +58,17 @@ def setup_scene(
     )
     reference = frame_window(reference, motion_start_frame, motion_end_frame)
     parquet_path = Path(reference.metadata.source_path)
+    from flash_chord.h2r.reference import H2rReference
+
+    if isinstance(reference, H2rReference):
+        from flash_chord.h2r.scene import build_h2r_scene
+
+        if not include_support or decompose_objects or (object_scale_min, object_scale_max) != (1.0, 1.0):
+            raise ValueError("H2R requires its complete fixed support, geometry and object scale")
+        if object_free_joint_damping != 0.0:
+            raise ValueError("H2R does not permit extra object damping")
+        scene = build_h2r_scene(reference, embodiment, world_count, collision)
+        return SceneSetup(parquet_path, reference, reference.binding_path.parent / "assets" / "support.usda", scene)
     support_usda = support_usda_for_reference(reference) if include_support else None
     if include_support and support_usda is None:
         raise FileNotFoundError(

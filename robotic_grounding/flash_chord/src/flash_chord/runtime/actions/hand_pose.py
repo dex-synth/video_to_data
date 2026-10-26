@@ -155,6 +155,7 @@ class ActionLayout:
         layout: EmbodimentLayout,
         sides: tuple[str, ...] = ("right", "left"),
         num_joint_dof: int | None = None,
+        wrist_dof_ids: dict[str, tuple[int, ...]] | None = None,
     ) -> "ActionLayout":
         if set(sides) != set(layout.sides) or len(sides) != len(layout.sides):
             raise ValueError(f"policy sides {sides} must match embodiment sides {layout.sides}")
@@ -171,15 +172,21 @@ class ActionLayout:
         total_fingers = 0
         for side in sides:
             hand = layout.hand(side)
-            if len(hand.wrist_pos_dof_ids) != 3 or len(hand.wrist_orient_dof_ids) != 3:
+            if wrist_dof_ids is None:
+                if len(hand.wrist_pos_dof_ids) != 3 or len(hand.wrist_orient_dof_ids) != 3:
+                    raise ValueError(f"{side} policy action requires a 3-DOF position and 3-DOF orientation wrist")
+                wrist = hand.wrist_pos_dof_ids + hand.wrist_orient_dof_ids
+            else:
+                wrist = wrist_dof_ids[side]
+            if len(wrist) != 6:
                 raise ValueError(f"{side} policy action requires a 3-DOF position and 3-DOF orientation wrist")
             num_fingers = len(hand.finger_dof_ids)
             action_starts.append(action_dim)
             processed_starts.append(processed_dim)
             finger_starts.append(total_fingers)
             finger_counts.append(num_fingers)
-            wrist_pos_dof_ids.extend(hand.wrist_pos_dof_ids)
-            wrist_ori_dof_ids.extend(hand.wrist_orient_dof_ids)
+            wrist_pos_dof_ids.extend(wrist[:3])
+            wrist_ori_dof_ids.extend(wrist[3:])
             finger_dof_ids.extend(hand.finger_dof_ids)
             action_dim += 6 + num_fingers
             processed_dim += 7 + num_fingers
@@ -377,6 +384,7 @@ class ActionBuffers:
         sides: tuple[str, ...] = ("right", "left"),
         num_joint_dof: int | None = None,
         device=None,
+        wrist_dof_ids: dict[str, tuple[int, ...]] | None = None,
     ) -> "ActionBuffers":
         config = config or ActionConfig()
         for name in (
@@ -390,7 +398,9 @@ class ActionBuffers:
             value = getattr(config, name)
             if not np.isfinite(value) or value <= 0.0:
                 raise ValueError(f"{name} must be positive and finite, got {value}")
-        layout = ActionLayout.from_embodiment(embodiment_layout, sides=sides, num_joint_dof=num_joint_dof)
+        layout = ActionLayout.from_embodiment(
+            embodiment_layout, sides=sides, num_joint_dof=num_joint_dof, wrist_dof_ids=wrist_dof_ids
+        )
         action_reference = DeviceRobotReference.build(
             reference,
             embodiment_layout,
