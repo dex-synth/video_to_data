@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Simulation timing + solver configuration (the single source of truth for physics knobs).
 
-The backend is MuJoCo-Warp via Newton's ``SolverMuJoCo`` — there is no separate physics engine to
-select; whether it runs on CPU or CUDA is decided by the device the model's Warp arrays live on.
+Training and replay here use MuJoCo-Warp through Newton's ``SolverMuJoCo``.
+Standalone evaluation on the exact common CPU task is implemented separately in
+``flash_chord.h2r.cpu_evaluation``; changing a Warp device is not that CPU path.
 ``solver`` / ``integrator`` / ``cone`` are MuJoCo solver settings (the constraint solver algorithm,
 time integrator, and friction cone), not engine choices. Both the replay and the RL/MPPI env consume
 one :class:`SimConfig`.

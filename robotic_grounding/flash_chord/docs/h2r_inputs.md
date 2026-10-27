@@ -138,3 +138,22 @@ FLASHCHORD_H2R_HELLO=/path/to/hello.json \
 ```
 
 该检查使用原生 GPU 环境的连续真实状态与接触，显式转换质心／原点速度，并打乱关节顺序、交换接触两侧，比较观测、actor、历史与最终控制。运行报告放在各自输出目录，不将训练日志或原生 viewer 的重播当作共同成绩。
+
+共同场景的独立 CPU eval 使用以下入口：
+
+```bash
+"$FLASH_PY" -m flash_chord.h2r.cpu_evaluation \
+  --task /path/to/fixed-task \
+  --metric-spec /path/to/fixed-metric-spec \
+  --checkpoint /path/to/policy.safetensors \
+  --prepared "$PREPARED" \
+  --output /path/to/new-native-cpu-run
+```
+
+`h2r.cpu_evaluation` 在方法进程内直接加载固定 task 的共同 MJCF，独立调用 MuJoCo CPU；不导入 bench runtime，也不读取 bench rollout。复用 `h2r.controller` 中原生观测、actor、动作与历史。MuJoCo 保留完整双精度积分状态，只在共同观测／控制边界转换 float32；body 状态使用独立 FK，接触保留最后求解时刻。CPU sensor bridge 的 float32 转换发生在接触坐标与力变换之前，这个顺序也必须一致。物理使用 CPU，策略特征与推理仍使用 CUDA。
+
+不能用 `SolverMuJoCo.use_mujoco_cpu=True` 临时替换 GPU 后就声称与共同 CPU eval 等价：该路径仍使用 Newton 重建模型，并默认每物理步通过 float32 Newton state 回写积分状态。这里的 CPU 入口直接复用共同物理模型，不启用 VOC，不通过方法输出修改共同任务。输出 `physical.npz`、`controls.npz` 与绑定／版本信息，供独立比较与共同指标诊断；正式共同结果仍由 bench 自己执行和记录。
+
+`--metric-spec` 只提供与 task 绑定的手腕测量坐标系，不参与控制或物理推进。记录按该坐标系执行完整位姿变换，包含单位局部旋转时的四元数归一化。
+
+可选回归 `tests/test_h2r_cpu_evaluation.py` 通过 `FLASHCHORD_H2R_CPU_TASK`、`FLASHCHORD_H2R_CHECKPOINT`、`FLASHCHORD_H2R_BINDING`、`FLASHCHORD_H2R_CPU_METRICS` 和 `FLASHCHORD_H2R_CPU_BENCH` 指定输入。最后一个路径包含独立执行的 `server/seed-42/physical.npz` 与 `client/controls.jsonl`。检查完整物理窗口、逐次观测／动作／目标精确相等，并验证读取观测不回写或截断双精度积分状态。已验证范围为 MuJoCo 3.11.0、Sharpa 双手和 box `[45,240)`。
