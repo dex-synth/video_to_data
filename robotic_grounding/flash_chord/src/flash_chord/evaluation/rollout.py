@@ -249,7 +249,8 @@ def record_tracking_error(
 def latch_completion(
     done: wp.array(dtype=wp.int32),
     truncation: wp.array(dtype=wp.int32),
-    reference_progress: wp.array(dtype=wp.float32),
+    reference_frame: wp.array(dtype=wp.int32),
+    last_reference_frame: int,
     step: int,
     completion_step: wp.array(dtype=wp.int32),  # out, preset to -1
     completed_terminated: wp.array(dtype=wp.int32),
@@ -264,7 +265,7 @@ def latch_completion(
         completion_step[world] = step
         completed_terminated[world] = done[world]
         completed_truncated[world] = truncation[world]
-        completed_progress[world] = reference_progress[world]
+        completed_progress[world] = float(reference_frame[world]) / float(wp.max(last_reference_frame, 1))
 
 
 def body_object_ids(layout: ObjectLayout) -> np.ndarray:
@@ -363,6 +364,10 @@ def record_object_pose_rollout(
     """
     if step_count <= 0:
         raise ValueError(f"step_count must be positive, got {step_count}")
+    if start_frame + step_count > reference.num_frames:
+        raise ValueError("requested rollout extends beyond the reference")
+    if not np.all(env.timestep.numpy() == start_frame):
+        raise ValueError("rollout initial reference frame differs from start_frame")
     termination = env.termination
     cause_names = tuple(termination.cause_names)
     error_names = tuple(termination.error_names)
@@ -390,8 +395,15 @@ def record_object_pose_rollout(
     completed_progress = wp.zeros(world_count, dtype=wp.float32, device=device)
 
     for step in range(step_count):
-        action, key = policy_action(actor_state, observation, key)
-        observation = jax_env.step(action).observation
+        # N reference samples span N-1 control intervals. Record the initial
+        # state at t=0, then each post-step state at its actual reference time.
+        if step:
+            action, key = policy_action(actor_state, observation, key)
+            observation = jax_env.step(action).observation
+        # Training diagnostics compare the transition to its held command.
+        # Evaluation measures the recorded state against its current timestamp.
+        env.command.gather(env.timestep)
+        termination.evaluate(env.state_0.body_q, env.timestep)
         # Explicit device: a launch off the arrays' device is silently skipped, not raised.
         wp.launch(
             record_object_pose,
@@ -418,7 +430,7 @@ def record_object_pose_rollout(
             latch_completion,
             dim=world_count,
             device=device,
-            inputs=[env.done, env.truncation, env.episode_reference_progress, step],
+            inputs=[env.terminated, env.truncated, env.timestep, reference.num_frames - 1, step],
             outputs=[completion_step, completed_terminated, completed_truncated, completed_progress],
         )
         if progress_interval and (step % progress_interval == 0 or step + 1 == step_count):

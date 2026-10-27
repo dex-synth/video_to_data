@@ -232,6 +232,7 @@ class ReferenceResetConfig:
     reset_finger_openness: float = 0.7
     always_reset_to_first_frame: bool = False
     reset_to_first_frame_probability: float = 0.1
+    immediate_first_frame_probability: float = 0.0
     first_frame_voc_threshold: float = 0.1
     voc_decay_steps: int = 20
     voc_decay_mode: Literal["step", "linear"] = "step"
@@ -246,6 +247,8 @@ class ReferenceResetConfig:
             )
         if self.first_frame_voc_threshold < 0.0:
             raise ValueError(f"first_frame_voc_threshold must be non-negative, got {self.first_frame_voc_threshold}")
+        if not 0.0 <= self.immediate_first_frame_probability <= 1.0:
+            raise ValueError("immediate_first_frame_probability must be finite and in [0, 1]")
         if self.voc_decay_steps < 0:
             raise ValueError(f"voc_decay_steps must be non-negative, got {self.voc_decay_steps}")
         if self.voc_decay_mode not in ("step", "linear"):
@@ -347,6 +350,7 @@ def sample_reference_reset(
     voc_decay_steps: int,
     always_first_frame: int,
     first_frame_probability: wp.array(dtype=wp.float32),
+    immediate_first_frame_probability: wp.array(dtype=wp.float32),
     first_frame_voc_threshold: float,
     reset_finger_openness: float,
     seed: int,
@@ -364,6 +368,15 @@ def sample_reference_reset(
 
     offset = world + reset_count[world] * 104729
     rng = wp.rand_init(seed, offset)
+    # Match explicit deployment: exact reference fingers, no settling hold,
+    # and the current curriculum scale from the first physical step.
+    if immediate_first_frame_probability[0] > 0.0 and wp.randf(rng) < immediate_first_frame_probability[0]:
+        reset_frame[world] = 0
+        finger_scale[world] = 1.0
+        steps_since_reset[world] = voc_decay_steps
+        applied_voc_scale[world] = curriculum_voc_scale[0]
+        reset_count[world] += 1
+        return
     frame = int(0)
     random_frame_count = num_frames - 1
     if always_first_frame == 0 and random_frame_count > 0:
@@ -478,6 +491,7 @@ class ReferenceReset:
     applied_voc_scale: wp.array
     reset_count: wp.array
     first_frame_probability: wp.array
+    immediate_first_frame_probability: wp.array
 
     context_names = RESET_CONTEXT_NAMES
 
@@ -528,6 +542,9 @@ class ReferenceReset:
                 dtype=wp.float32,
                 device=device,
             ),
+            immediate_first_frame_probability=wp.array(
+                [config.immediate_first_frame_probability], dtype=wp.float32, device=device
+            ),
         )
 
     def set_reset_to_first_frame_probability(self, probability: float | None) -> float:
@@ -550,6 +567,7 @@ class ReferenceReset:
                 self.config.voc_decay_steps,
                 int(self.config.always_reset_to_first_frame),
                 self.first_frame_probability,
+                self.immediate_first_frame_probability,
                 self.config.first_frame_voc_threshold,
                 self.config.reset_finger_openness,
                 self.config.seed,
@@ -563,6 +581,14 @@ class ReferenceReset:
                 self.applied_voc_scale,
             ],
         )
+
+    def set_immediate_first_frame_probability(self, probability: float | None) -> float:
+        """Mix deployment-exact resets without changing the legacy default distribution."""
+        resolved = self.config.immediate_first_frame_probability if probability is None else probability
+        if not math.isfinite(resolved) or not 0.0 <= resolved <= 1.0:
+            raise ValueError("immediate_first_frame_probability must be None or finite and in [0, 1]")
+        self.immediate_first_frame_probability.assign(np.asarray([resolved], dtype=np.float32))
+        return float(resolved)
 
     def prepare_explicit(self, reset_mask: wp.array, curriculum_voc_scale: wp.array) -> None:
         wp.launch(

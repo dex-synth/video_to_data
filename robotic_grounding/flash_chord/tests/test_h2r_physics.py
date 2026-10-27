@@ -163,3 +163,53 @@ def test_masked_reset_discards_solver_and_contact_history(physics):
         wp.capture_launch(capture.graph)
         env.step(wp.zeros(2 * env.action.action_dim, dtype=wp.float32))
         assert np.isfinite(env.state_0.joint_q.numpy()).all()
+
+
+def test_immediate_training_reset_matches_deployment_state_and_clock(physics):
+    from dataclasses import replace
+
+    original, _, binding = physics
+    config = replace(original.config, reset=replace(
+        original.config.reset, immediate_first_frame_probability=1.0))
+    with wp.ScopedDevice("cuda:0"):
+        scene = build_h2r_scene(original.reference, H2rSharpaHands(binding), 2,
+                               CollisionPolicy(ground=False))
+        env = RLEnv(scene, original.reference, config)
+        env.reset(frame_id=0)
+        explicit = [a.numpy().copy() for a in
+                    (env.state_0.joint_q, env.state_0.joint_qd, env.observation)]
+        env.reset()
+        for actual, expected in zip(
+            (env.state_0.joint_q, env.state_0.joint_qd, env.observation), explicit
+        ):
+            np.testing.assert_array_equal(actual.numpy(), expected)
+        np.testing.assert_array_equal(env.object_control_scale.numpy(), 0)
+        env.capture_step()
+        env.reset()
+        env.step(wp.zeros(2 * env.action.action_dim, dtype=wp.float32))
+        np.testing.assert_array_equal(env.timestep.numpy(), 1)
+        np.testing.assert_array_equal(env.object_control_scale.numpy(), 0)
+
+
+def test_rollout_errors_use_recorded_state_timestamp(physics):
+    from types import SimpleNamespace
+    from flash_chord.evaluation.rollout import record_object_pose_rollout
+
+    env, _, _ = physics
+    env.reset(frame_id=0)
+    zero = wp.zeros(env.action.action_dim, dtype=wp.float32, device=env.device)
+
+    def step(action):
+        env.step(action)
+        return SimpleNamespace(observation=None)
+
+    rollout = record_object_pose_rollout(
+        env, SimpleNamespace(step=step), lambda *args: (zero, None), None, None, None,
+        reference=env.reference, step_count=5, progress_interval=0,
+    )
+    assert env.timestep.numpy().tolist() == [4]
+    expected = np.linalg.norm(
+        rollout.achieved_pose_w[:, 0, :, :3] - rollout.reference_pose_w[..., :3], axis=-1
+    ).max(axis=1)
+    index = rollout.tracking_error_names.index("object_position_m")
+    np.testing.assert_allclose(rollout.tracking_error[:, 0, index], expected, atol=1e-7, rtol=0)

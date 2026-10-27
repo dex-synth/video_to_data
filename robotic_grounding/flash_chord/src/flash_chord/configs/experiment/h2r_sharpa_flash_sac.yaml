@@ -3,6 +3,7 @@
 defaults:
   - sharpa_flash_sac
   - override /embodiment: h2r_sharpa_hands
+  - override /curriculum: h2r_tracking_250m
   - _self_
 
 task:

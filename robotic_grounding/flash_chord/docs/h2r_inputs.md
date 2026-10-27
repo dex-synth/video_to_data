@@ -51,6 +51,16 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 
 第二个命令使用 checkpoint 中的配置重建方法环境，检查读回与推理；输出是方法内部诊断，不是 h2r 共同测评成绩。正式训练沿用 `h2r_sharpa_flash_sac` 的完整预算，须另行确定实验设置与验收。
 
+## 训练初始化与部署初始化
+
+`ReferenceReset` 默认在随机参考帧打开部分手指，并停留至 `voc_decay_steps` 结束。这段准备期仍可使用 VOC=1，即使课程的全局 VOC 已降为零。`reset_to_first_frame_probability` 只改变参考帧采样，不取消准备期，也不恢复完整参考手指姿态。共同评估的首帧显式 reset 则使用精确参考手指、零速度，立即开始运动，不执行这段准备。
+
+因此，训练最后阶段需要覆盖实际部署初始化。`reset.immediate_first_frame_probability` 控制采用精确首帧、完整手指姿态、无等待 reset 的比例；这些 reset 从第一步使用当前课程 VOC。默认值为 0，保留原生采样配方。也可在某一课程阶段设置同名 `immediate_first_frame_probability`，阶段未设置时使用 reset 配置值。H2R 专用课程 `h2r_tracking_250m` 保留原生 VOC 日程和奖励，在最后约 5000 万步将此比例设为 1，此时 VOC=0；原生 `sharpa_flash_sac` 的课程不变。旧 checkpoint 仍按自身保存的配置加载，不会自动采用新课程。
+
+从已完成 VOC 课程的训练状态继续训练时，可设置 `reset.immediate_first_frame_probability=1.0`，并保留 VOC=0 的末阶段；恢复 `state_*.safetensors`，另存输出和完整配置。该设置不保证旧策略无需适应即可成功，也不会改写 checkpoint 中保存的旧配置。不能通过在共同评估端增加准备时间来替代这项训练覆盖。
+
+训练误差比较的是一次物理推进后的状态与这次推进所保持的控制目标，且统计包含准备期、随机起点和失败后的新 episode。`evaluate_policy.py` 则包含初态，N 个参考采样只执行 N−1 次控制推进，按照各状态的真实参考时刻记录误差。两者均值不能直接当作同一个指标。比较训练与部署效果时，应另跑无辅助、无等待、无提前 reset 的完整轨迹，保留所有失败，并使用同一参考时间轴和计分规则。
+
 ## 文件与职责
 
 | 输出 | 用途 |

@@ -64,6 +64,21 @@ def test_sharpa_flash_sac_uses_validated_final_mixed_reset_curriculum():
     assert curriculum.stage_at(250_003_455).reset_to_first_frame_probability == 0.5
 
 
+def test_h2r_final_stage_trains_immediate_unassisted_deployment():
+    config = compose_config("train_flash_sac", ["experiment=h2r_sharpa_flash_sac", _PARQUET])
+    training = instantiate_typed(config.training, FlashSACTrainingConfig)
+    native = instantiate_typed(
+        compose_config("train_flash_sac", ["experiment=sharpa_flash_sac", _PARQUET]).training,
+        FlashSACTrainingConfig,
+    )
+    assert training.curriculum.thresholds == native.curriculum.thresholds
+    assert training.curriculum.stages[:-1] == native.curriculum.stages[:-1]
+    final = training.curriculum.stage_at(200_007_680)
+    assert final.voc_scale == 0.0
+    assert final.immediate_first_frame_probability == 1.0
+    assert final.objective_weights == native.curriculum.stages[-1].objective_weights
+
+
 def test_dexmate_recipe_retains_derived_controller_without_a_versioned_public_config():
     config = compose_config("train_flash_sac", ["experiment=dexmate_sharpa_flash_sac", _PARQUET])
     training = instantiate_typed(config.training, FlashSACTrainingConfig)

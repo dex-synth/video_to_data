@@ -9,6 +9,48 @@ from flash_chord.assets import ASSETS_DIR
 
 pytestmark = pytest.mark.gpu
 
+
+def test_immediate_reference_reset_matches_explicit_start_and_preserves_other_worlds():
+    import warp as wp
+    from flash_chord.lifecycle.reset import ReferenceReset, ReferenceResetConfig
+
+    with wp.ScopedDevice("cuda:0"):
+        policy = ReferenceReset.build(2, 195, ReferenceResetConfig(voc_decay_steps=20))
+        mask = wp.array([1, 0], dtype=wp.int32)
+        scale = wp.array([0.0], dtype=wp.float32)
+        policy.reset_frame.assign([17, 23])
+        policy.finger_scale.assign([0.2, 0.3])
+        policy.steps_since_reset.assign([5, 6])
+        policy.applied_voc_scale.assign([1.0, 0.5])
+        policy.set_immediate_first_frame_probability(1.0)
+        policy.sample(mask, scale)
+        np.testing.assert_array_equal(policy.reset_frame.numpy(), [0, 23])
+        np.testing.assert_array_equal(policy.finger_scale.numpy(), np.array([1.0, 0.3], np.float32))
+        np.testing.assert_array_equal(policy.steps_since_reset.numpy(), [20, 6])
+        np.testing.assert_array_equal(policy.applied_voc_scale.numpy(), [0.0, 0.5])
+        np.testing.assert_array_equal(policy.reset_count.numpy(), [1, 0])
+        phase = wp.array([0, 23], dtype=wp.int32)
+        age = wp.zeros(2, dtype=wp.int32)
+        policy.advance(wp.array([0, 1], dtype=wp.int32), wp.zeros(2, dtype=wp.int32), phase, age, scale)
+        np.testing.assert_array_equal(phase.numpy(), [1, 23])
+        np.testing.assert_array_equal(policy.applied_voc_scale.numpy(), [0.0, 0.5])
+        assert policy.set_immediate_first_frame_probability(None) == 0.0
+        with pytest.raises(ValueError, match="immediate_first_frame_probability"):
+            policy.set_immediate_first_frame_probability(float("nan"))
+
+
+def test_zero_curriculum_still_has_legacy_reset_assistance_unless_immediate_is_selected():
+    import warp as wp
+    from flash_chord.lifecycle.reset import ReferenceReset, ReferenceResetConfig
+
+    with wp.ScopedDevice("cuda:0"):
+        policy = ReferenceReset.build(32, 195, ReferenceResetConfig(always_reset_to_first_frame=True))
+        policy.sample(wp.ones(32, dtype=wp.int32), wp.zeros(1, dtype=wp.float32))
+        np.testing.assert_array_equal(policy.reset_frame.numpy(), 0)
+        np.testing.assert_array_equal(policy.steps_since_reset.numpy(), 0)
+        np.testing.assert_array_equal(policy.applied_voc_scale.numpy(), 1)
+        assert (policy.finger_scale.numpy() < 0.7).all()
+
 _HOT3D = (
     ASSETS_DIR
     / "human_motion_data"
