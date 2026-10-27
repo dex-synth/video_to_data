@@ -5,19 +5,9 @@
 import numpy as np
 import pytest
 
-from flash_chord.assets import ASSETS_DIR
 
-pytestmark = [pytest.mark.gpu, pytest.mark.sequence_data]
+pytestmark = pytest.mark.gpu
 
-_VEGA_MIXER = (
-    ASSETS_DIR
-    / "human_motion_data"
-    / "arctic"
-    / "arctic_processed"
-    / "sequence_id=dataset_s01_mixer_use_01"
-    / "robot_name=vega_sharpa"
-    / "data.parquet"
-)
 
 _DISABLE_FAILURE_TERMS = (
     "termination.wrist_position.enabled=false",
@@ -27,45 +17,14 @@ _DISABLE_FAILURE_TERMS = (
 )
 
 
-def _build_env(*extra_overrides):
-    from flash_chord.configuration import compose_config, instantiate_typed
-    from flash_chord.embodiments.base import Embodiment
+def _build_env(h2r_setup, h2r_config, *extra_overrides):
+    from flash_chord.configuration import instantiate_typed
     from flash_chord.envs.rl import RLEnv, RLEnvConfig
-    from flash_chord.scene.collision import CollisionPolicy
-    from flash_chord.scene.setup import setup_scene
 
-    config = compose_config(
-        "train",
-        overrides=(
-            f"task.parquet='{_VEGA_MIXER}'",
-            "task.motion_speed=0.5",
-            "scene.world_count=2",
-            "scene.decompose_objects=false",
-            "embodiment=dexmate_sharpa",
-            "action=residual_joint_position",
-            "observation=articulated_arm",
-            "collision=manipulation",
-            "env.auto_reset=false",
-            "env.voc_scale=0.0",
-            "reset.always_reset_to_first_frame=true",
-            "reset.voc_decay_steps=0",
-            *extra_overrides,
-        ),
-    )
-    environment_config = instantiate_typed(config.env, RLEnvConfig)
-    embodiment = instantiate_typed(config.embodiment, Embodiment)
-    collision = instantiate_typed(config.collision, CollisionPolicy)
-    setup = setup_scene(
-        parquet=config.task.parquet,
-        control_fps=environment_config.sim.fps,
-        motion_speed=config.task.motion_speed,
-        embodiment=embodiment,
-        collision=collision,
-        world_count=config.scene.world_count,
-        include_support=config.scene.support,
-        decompose_objects=config.scene.decompose_objects,
-    )
-    env = RLEnv(setup.scene, setup.reference, config=environment_config)
+    config = h2r_config("env.auto_reset=false", "env.voc_scale=0", "reset.always_reset_to_first_frame=true",
+                        "reset.voc_decay_steps=0", *extra_overrides)
+    setup = h2r_setup(2)
+    env = RLEnv(setup.scene, setup.reference, config=instantiate_typed(config.env, RLEnvConfig))
     env.reset()
     env.capture_step()
     return env, setup
@@ -99,11 +58,11 @@ def _record(env, setup, step_count: int):
     )
 
 
-def test_recorded_poses_match_a_direct_body_readback():
+def test_recorded_poses_match_a_direct_body_readback(h2r_setup, h2r_config):
     from flash_chord.evaluation.rollout import record_object_pose_rollout
     from flash_chord.training.environment import WarpRLEnv
 
-    env, setup = _build_env(*_DISABLE_FAILURE_TERMS)
+    env, setup = _build_env(h2r_setup, h2r_config, *_DISABLE_FAILURE_TERMS)
     jax_env = WarpRLEnv(env, publish_diagnostics=True, publish_step_metrics=True)
     observation = jax_env.reset()
     rollout = record_object_pose_rollout(
@@ -123,8 +82,8 @@ def test_recorded_poses_match_a_direct_body_readback():
     assert rollout.achieved_pose_w[-1] == pytest.approx(expected, abs=1e-5)
 
 
-def test_every_world_runs_the_whole_sequence_without_terminating():
-    env, setup = _build_env(*_DISABLE_FAILURE_TERMS)
+def test_every_world_runs_the_whole_sequence_without_terminating(h2r_setup, h2r_config):
+    env, setup = _build_env(h2r_setup, h2r_config, *_DISABLE_FAILURE_TERMS)
     steps = setup.reference.num_frames
     rollout = _record(env, setup, steps)
 
@@ -138,10 +97,10 @@ def test_every_world_runs_the_whole_sequence_without_terminating():
     assert set(rollout.non_finite_worlds) <= set(range(env.world_count))
 
 
-def test_enabled_failure_terms_freeze_the_reference_and_are_rejected():
+def test_enabled_failure_terms_freeze_the_reference_and_are_rejected(h2r_setup, h2r_config):
     from flash_chord.evaluation.metrics import TrackingThresholds, chord_success
 
-    env, setup = _build_env()
+    env, setup = _build_env(h2r_setup, h2r_config)
     rollout = _record(env, setup, setup.reference.num_frames)
 
     assert rollout.completion.terminated.any(), "a zero-action rollout should fail object tracking"
@@ -149,8 +108,8 @@ def test_enabled_failure_terms_freeze_the_reference_and_are_rejected():
         chord_success(rollout.tracking_error, TrackingThresholds(object_position_m=0.1), rollout.completion)
 
 
-def test_tracking_error_matches_the_published_diagnostics():
-    env, setup = _build_env(*_DISABLE_FAILURE_TERMS)
+def test_tracking_error_matches_the_published_diagnostics(h2r_setup, h2r_config):
+    env, setup = _build_env(h2r_setup, h2r_config, *_DISABLE_FAILURE_TERMS)
     rollout = _record(env, setup, 3)
 
     width = len(env.termination.packed_diagnostic_names)
@@ -159,10 +118,10 @@ def test_tracking_error_matches_the_published_diagnostics():
     assert (rollout.tracking_error >= 0.0).all()
 
 
-def test_reference_poses_use_xyzw_and_track_the_reference_arrays():
+def test_reference_poses_use_xyzw_and_track_the_reference_arrays(h2r_setup, h2r_config):
     from flash_chord.evaluation.rollout import reference_object_pose
 
-    _, setup = _build_env(*_DISABLE_FAILURE_TERMS)
+    _, setup = _build_env(h2r_setup, h2r_config, *_DISABLE_FAILURE_TERMS)
     steps = 5
     poses = reference_object_pose(setup.reference, 0, steps)
     position = np.asarray(setup.reference.object_body_pos_w())[:steps]
@@ -173,10 +132,10 @@ def test_reference_poses_use_xyzw_and_track_the_reference_arrays():
     assert poses[..., 3:6] == pytest.approx(quaternion_wxyz[..., 1:])
 
 
-def test_body_object_ids_assign_every_reference_body():
+def test_body_object_ids_assign_every_reference_body(h2r_setup, h2r_config):
     from flash_chord.evaluation.rollout import body_object_ids
 
-    env, _ = _build_env(*_DISABLE_FAILURE_TERMS)
+    env, _ = _build_env(h2r_setup, h2r_config, *_DISABLE_FAILURE_TERMS)
     layout = env.command.layout
     ids = body_object_ids(layout)
 
@@ -185,13 +144,13 @@ def test_body_object_ids_assign_every_reference_body():
     assert np.bincount(ids, minlength=layout.num_objects).sum() == layout.num_bodies
 
 
-def test_sampled_vertices_come_from_the_simulated_geometry():
+def test_sampled_vertices_come_from_the_simulated_geometry(h2r_setup, h2r_config):
     """Vertices must carry the model's own scale and shape transform, not the raw mesh file."""
     import newton
 
     from flash_chord.evaluation.rollout import sample_object_vertices
 
-    env, setup = _build_env(*_DISABLE_FAILURE_TERMS)
+    env, setup = _build_env(h2r_setup, h2r_config, *_DISABLE_FAILURE_TERMS)
     radii = np.asarray(setup.reference.object_mesh_radius(), dtype=np.float64)
     vertices = sample_object_vertices(env.scene, count=64, seed=3)
 

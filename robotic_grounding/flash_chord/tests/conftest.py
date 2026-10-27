@@ -36,3 +36,42 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_gpu)
         if not SEQUENCE_DATA_AVAILABLE and "sequence_data" in item.keywords:
             item.add_marker(skip_sequences)
+
+
+@pytest.fixture
+def h2r_binding():
+    import os
+    from pathlib import Path
+
+    path = os.environ.get("FLASHCHORD_H2R_BINDING")
+    if not path:
+        pytest.skip("set FLASHCHORD_H2R_BINDING to a prepared h2r_binding.json")
+    return Path(path)
+
+
+@pytest.fixture
+def h2r_config(h2r_binding):
+    from flash_chord.configuration import compose_config
+
+    def compose(*overrides):
+        return compose_config("train_flash_sac", [
+            f"task.parquet='{h2r_binding}'", "scene.world_count=2", "logging.mode=disabled", *overrides,
+        ])
+
+    return compose
+
+
+@pytest.fixture
+def h2r_setup(h2r_binding):
+    from flash_chord.h2r.robot import H2rSharpaHands
+    from flash_chord.scene.collision import CollisionPolicy
+    from flash_chord.scene.setup import setup_scene
+
+    def build(world_count=1):
+        return setup_scene(
+            parquet=h2r_binding, control_fps=30, motion_speed=1,
+            embodiment=H2rSharpaHands(h2r_binding), collision=CollisionPolicy(ground=False),
+            world_count=world_count, include_support=True, decompose_objects=False,
+        )
+
+    return build

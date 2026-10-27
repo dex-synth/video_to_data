@@ -1,18 +1,5 @@
 defaults:
-  - task: default
-  - sim: rl
-  - scene: eval
-  - collision: training
-  - embodiment: sharpa_hands
-  - action: residual_hand_pose
-  - observation: policy
-  - objective: tracking
-  - termination: tracking
-  - reset: reference
-  - env: rl
-  - curriculum: reference
-  - logging: wandb
-  - training: reference_ppo
+  - train_flash_sac
   - evaluation: view
   - markers: default
   - viewer: default
@@ -20,6 +7,9 @@ defaults:
 
 logging:
   mode: disabled
+
+scene:
+  world_count: 1
 
 env:
   voc_scale: 0.0

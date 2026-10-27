@@ -80,8 +80,8 @@ default-values:
   # Supply image and output_url with --set for your deployment.
   wandb_credential: wandb-cred
   wandb_project: v2d-flash-chord
-  run_name: sharpa-flash-sac
-  experiment: sharpa_flash_sac
+  run_name: h2r-sharpa-flash-sac
+  experiment: h2r_sharpa_flash_sac
   parquet: ???
   include_support: true
   logging_mode: online

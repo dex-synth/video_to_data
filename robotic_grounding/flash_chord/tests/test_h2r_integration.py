@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Optional checks against a prepared common bundle, never a substitute fixture."""
 
+import json
 import os
+import runpy
 import shutil
 from pathlib import Path
 
@@ -10,9 +12,10 @@ import numpy as np
 import pytest
 import warp as wp
 
-from flash_chord.configuration import compose_config, instantiate_typed
+from flash_chord.configuration import compose_config, instantiate_typed, resolved_dict
 from flash_chord.embodiments.base import Embodiment
 from flash_chord.envs.rl import RLEnv, RLEnvConfig
+from flash_chord.h2r.configuration import require_h2r_input
 from flash_chord.h2r.inputs import human_bundle
 from flash_chord.h2r.reference import load_h2r
 from flash_chord.runtime.actions.hand_pose import ActionBuffers
@@ -41,6 +44,46 @@ def test_reference_retains_source_clock_and_object(binding):
             load_h2r(binding, **kwargs)
     with pytest.raises(ValueError):
         reference.frame_window(1, -1)
+
+
+def test_application_guard_accepts_sealed_input_and_rejects_changed_binding(binding, tmp_path):
+    cfg = compose_config("train_flash_sac", [f"task.parquet={binding}"])
+    expected = require_h2r_input(cfg)
+    assert expected["human_bundle_id"]
+    moved = tmp_path / "prepared"
+    shutil.copytree(binding.parent, moved)
+    cfg.task.parquet = str(moved / "h2r_binding.json")
+    assert require_h2r_input(cfg, expected_binding=expected) == expected
+    with pytest.raises(ValueError, match="same sealed H2R input"):
+        require_h2r_input(cfg, expected_binding={**expected, "scene_id": "other"})
+    (moved / "human/reference.npz").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="Input changed"):
+        require_h2r_input(cfg)
+
+
+@pytest.mark.parametrize("application", ["train_flash_sac", "view_policy", "evaluate_policy"])
+def test_native_checkpoint_is_rejected_before_runtime_construction(binding, monkeypatch, application):
+    cfg = compose_config("train_flash_sac", [f"task.parquet={binding}"])
+    native = resolved_dict(cfg)
+    native["embodiment"] = {"_target_": "flash_chord.embodiments.sharpa_hands.SharpaHands"}
+    metadata = {"resolved_config_json": json.dumps(native)}
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    if application == "evaluate_policy":
+        from flash_chord.evaluation import harness
+
+        monkeypatch.setattr(harness, "read_checkpoint_metadata", lambda _: metadata)
+        with pytest.raises(ValueError, match="only supports the H2R recipe"):
+            harness.evaluate_checkpoint("/tmp/native.safetensors", world_count=1)
+    else:
+        main = runpy.run_path(str(scripts / f"{application}.py"))["main"].__wrapped__
+        monkeypatch.setitem(main.__globals__, "read_checkpoint_metadata", lambda _: metadata)
+        if application == "train_flash_sac":
+            cfg.training.resume = True
+            cfg.training.checkpoint_path = "/tmp/native.safetensors"
+        else:
+            cfg = compose_config("view_policy", ["evaluation.checkpoint=/tmp/native.safetensors"])
+        with pytest.raises(ValueError, match="only supports the H2R recipe"):
+            main(cfg)
 
 
 def test_prepared_bundle_is_portable_and_detects_changed_inputs(binding, tmp_path):

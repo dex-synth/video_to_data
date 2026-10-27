@@ -5,7 +5,6 @@
 import numpy as np
 import pytest
 
-from flash_chord.assets import ASSETS_DIR
 
 pytestmark = pytest.mark.gpu
 
@@ -51,38 +50,15 @@ def test_zero_curriculum_still_has_legacy_reset_assistance_unless_immediate_is_s
         np.testing.assert_array_equal(policy.applied_voc_scale.numpy(), 1)
         assert (policy.finger_scale.numpy() < 0.7).all()
 
-_HOT3D = (
-    ASSETS_DIR
-    / "human_motion_data"
-    / "hot3d"
-    / "hot3d_processed"
-    / "sequence_id=P0002_59a84a3a_seg025"
-    / "robot_name=sharpa_wave"
-)
-_VEGA_MIXER = (
-    ASSETS_DIR
-    / "human_motion_data"
-    / "arctic"
-    / "arctic_processed"
-    / "sequence_id=dataset_s01_mixer_use_01"
-    / "robot_name=vega_sharpa"
-    / "data.parquet"
-)
 
-
-@pytest.mark.sequence_data
-def test_reset_places_wrists_and_objects_at_reference():
+def test_reset_places_wrists_and_objects_at_reference(h2r_setup):
     import warp as wp
 
-    from flash_chord.data.mano_sharpa import load_mano_sharpa
-    from flash_chord.embodiments.sharpa_hands import SharpaHands
     from flash_chord.lifecycle.reset import reset_scene_to_frame
-    from flash_chord.scene.builder import build_scene
 
-    ref = load_mano_sharpa(str(_HOT3D))
-    embodiment = SharpaHands()
     with wp.ScopedDevice("cuda:0"):
-        scene = build_scene(embodiment, ref, world_count=1)
+        setup = h2r_setup(1)
+        scene, ref = setup.scene, setup.reference
         state = scene.model.state()
         reset_scene_to_frame(scene, ref, 0, state)
         body_q = state.body_q.numpy()
@@ -103,19 +79,14 @@ def test_reset_places_wrists_and_objects_at_reference():
             )
 
 
-@pytest.mark.sequence_data
-def test_masked_reset_changes_only_selected_world_and_zeros_velocity():
+def test_masked_reset_changes_only_selected_world_and_zeros_velocity(h2r_setup):
     import warp as wp
 
-    from flash_chord.data.mano_sharpa import load_mano_sharpa
-    from flash_chord.embodiments.sharpa_hands import SharpaHands
     from flash_chord.lifecycle.reset import ReferenceResetTable, reset_worlds
-    from flash_chord.scene.builder import build_scene
 
-    ref = load_mano_sharpa(str(_HOT3D))
-    embodiment = SharpaHands()
     with wp.ScopedDevice("cuda:0"):
-        scene = build_scene(embodiment, ref, world_count=2)
+        setup = h2r_setup(2)
+        scene, ref = setup.scene, setup.reference
         state = scene.model.state()
         table = ReferenceResetTable.build(scene, ref)
         state.joint_qd.assign(np.ones(scene.model.joint_dof_count, dtype=np.float32))
@@ -136,24 +107,15 @@ def test_masked_reset_changes_only_selected_world_and_zeros_velocity():
     np.testing.assert_allclose(joint_qd[1], 1.0)
 
 
-@pytest.mark.sequence_data
-def test_vega_reset_uses_bound_named_joint_and_semantic_frame_trajectories():
+def test_h2r_reset_uses_bound_named_joint_and_semantic_frame_trajectories(h2r_setup):
     import warp as wp
 
-    from flash_chord.data import load_reference
-    from flash_chord.embodiments.vega_sharpa import VegaSharpa
     from flash_chord.lifecycle.reset import ReferenceResetTable, reset_worlds
-    from flash_chord.scene.builder import build_scene
 
-    reference = load_reference(_VEGA_MIXER)
     frame = 100
     with wp.ScopedDevice("cuda:0"):
-        scene = build_scene(
-            VegaSharpa(),
-            reference,
-            world_count=1,
-            decompose_objects=False,
-        )
+        setup = h2r_setup(1)
+        scene, reference = setup.scene, setup.reference
         table = ReferenceResetTable.build(scene, reference)
         state = scene.model.state()
         state.joint_qd.assign(np.ones(scene.model.joint_dof_count, dtype=np.float32))
@@ -389,162 +351,3 @@ def test_reference_reset_publishes_applied_target_and_normalized_progress():
         zero_decay.prepare_explicit(mask, target)
         zero_decay.compute_context(target, zero_context)
         np.testing.assert_allclose(zero_context.numpy(), [0.25, 0.25, 1.0])
-
-
-def test_recon_body_reset_spreads_shoulders_and_zeros_fingers_through_offsets():
-    import warp as wp
-
-    from flash_chord.lifecycle.reset import sample_recon_body_reset
-
-    reference = np.asarray(
-        [
-            [0.0, 0.0, 0.3, -0.4, 9.0, 9.0],
-            [0.0, 0.0, 0.5, -0.6, 9.0, 9.0],
-        ],
-        dtype=np.float32,
-    )
-    with wp.ScopedDevice("cpu"):
-        outputs = (
-            wp.zeros(1, dtype=wp.int32),
-            wp.zeros(1, dtype=wp.int32),
-            wp.ones(1, dtype=wp.float32),
-            wp.zeros(1, dtype=wp.int32),
-            wp.zeros(1, dtype=wp.float32),
-            wp.zeros(6, dtype=wp.float32),
-            wp.zeros(6, dtype=wp.float32),
-        )
-        wp.launch(
-            sample_recon_body_reset,
-            dim=1,
-            inputs=[
-                wp.ones(1, dtype=wp.int32),
-                wp.array(reference, dtype=wp.float32),
-                6,
-                0,
-                1,
-                1,
-                wp.zeros(1, dtype=wp.float32),
-                wp.zeros(1, dtype=wp.float32),
-                50,
-                wp.array([0.0], dtype=wp.float32),
-                1.0,
-                0.2,
-                0,
-                1,
-                wp.array([2, 3], dtype=wp.int32),
-                42,
-            ],
-            outputs=list(outputs),
-        )
-
-    reset_count, reset_frame, finger_scale, age, voc, raw_offset, offset = outputs
-    assert reset_count.numpy().tolist() == [1]
-    assert reset_frame.numpy().tolist() == [0]
-    np.testing.assert_array_equal(finger_scale.numpy(), [1.0])
-    assert age.numpy().tolist() == [0]
-    np.testing.assert_array_equal(voc.numpy(), [1.0])
-    np.testing.assert_allclose(raw_offset.numpy(), [0.2, -0.2, -0.3, 0.4, 0.0, 0.0])
-    np.testing.assert_array_equal(offset.numpy(), raw_offset.numpy())
-    np.testing.assert_allclose(reference[0] + offset.numpy(), [0.2, -0.2, 0.0, 0.0, 9.0, 9.0])
-
-
-def test_recon_body_immediate_reset_exactly_matches_unassisted_frame_zero_state():
-    import warp as wp
-
-    from flash_chord.lifecycle.reset import sample_recon_body_reset
-
-    reference = np.asarray(
-        [
-            [0.0, 0.0, 0.3, -0.4, 9.0, 9.0],
-            [0.0, 0.0, 0.5, -0.6, 9.0, 9.0],
-        ],
-        dtype=np.float32,
-    )
-    with wp.ScopedDevice("cpu"):
-        outputs = (
-            wp.zeros(1, dtype=wp.int32),
-            wp.zeros(1, dtype=wp.int32),
-            wp.ones(1, dtype=wp.float32),
-            wp.zeros(1, dtype=wp.int32),
-            wp.ones(1, dtype=wp.float32),
-            wp.ones(6, dtype=wp.float32),
-            wp.ones(6, dtype=wp.float32),
-        )
-        wp.launch(
-            sample_recon_body_reset,
-            dim=1,
-            inputs=[
-                wp.ones(1, dtype=wp.int32),
-                wp.array(reference, dtype=wp.float32),
-                6,
-                0,
-                1,
-                0,
-                wp.zeros(1, dtype=wp.float32),
-                wp.ones(1, dtype=wp.float32),
-                50,
-                wp.array([0.0], dtype=wp.float32),
-                1.0,
-                0.2,
-                0,
-                1,
-                wp.array([2, 3], dtype=wp.int32),
-                42,
-            ],
-            outputs=list(outputs),
-        )
-
-    reset_count, reset_frame, finger_scale, age, voc, raw_offset, offset = outputs
-    assert reset_count.numpy().tolist() == [1]
-    assert reset_frame.numpy().tolist() == [0]
-    np.testing.assert_array_equal(finger_scale.numpy(), [1.0])
-    assert age.numpy().tolist() == [51]
-    np.testing.assert_array_equal(voc.numpy(), [0.0])
-    np.testing.assert_array_equal(raw_offset.numpy(), np.zeros(6, dtype=np.float32))
-    np.testing.assert_array_equal(offset.numpy(), np.zeros(6, dtype=np.float32))
-
-
-def test_recon_body_settling_offsets_voc_and_reference_release_timeline():
-    import warp as wp
-
-    from flash_chord.lifecycle.reset import advance_recon_body_reset
-
-    with wp.ScopedDevice("cpu"):
-        terminated = wp.zeros(1, dtype=wp.int32)
-        truncated = wp.zeros(1, dtype=wp.int32)
-        curriculum = wp.array([0.2], dtype=wp.float32)
-        raw_offset = wp.array([2.0, -2.0], dtype=wp.float32)
-        age = wp.zeros(1, dtype=wp.int32)
-        applied_voc = wp.ones(1, dtype=wp.float32)
-        offset = wp.array([2.0, -2.0], dtype=wp.float32)
-        timestep = wp.array([7], dtype=wp.int32)
-        episode_step = wp.zeros(1, dtype=wp.int32)
-
-        def advance(count=1):
-            for _ in range(count):
-                wp.launch(
-                    advance_recon_body_reset,
-                    dim=1,
-                    inputs=[terminated, truncated, 50, 40, 10, 1.0, 2, curriculum, raw_offset],
-                    outputs=[age, applied_voc, offset, timestep, episode_step],
-                )
-
-        advance(39)
-        np.testing.assert_allclose(offset.numpy(), [0.05, -0.05], atol=1.0e-6)
-        np.testing.assert_allclose(applied_voc.numpy(), [1.0])
-        assert timestep.numpy().tolist() == [7]
-
-        advance()
-        np.testing.assert_array_equal(offset.numpy(), 0.0)
-        np.testing.assert_allclose(applied_voc.numpy(), [1.0])
-
-        advance(5)
-        np.testing.assert_allclose(applied_voc.numpy(), [0.6], atol=1.0e-6)
-        assert timestep.numpy().tolist() == [7]
-
-        advance(5)
-        np.testing.assert_allclose(applied_voc.numpy(), [0.2], atol=1.0e-6)
-        assert (age.numpy().tolist(), episode_step.numpy().tolist(), timestep.numpy().tolist()) == ([50], [50], [7])
-
-        advance()
-        assert (age.numpy().tolist(), episode_step.numpy().tolist(), timestep.numpy().tolist()) == ([51], [51], [8])

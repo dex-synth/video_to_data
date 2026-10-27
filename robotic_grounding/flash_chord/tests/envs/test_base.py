@@ -5,18 +5,8 @@
 import numpy as np
 import pytest
 
-from flash_chord.assets import ASSETS_DIR
 
 pytestmark = pytest.mark.gpu
-
-_HOT3D = (
-    ASSETS_DIR
-    / "human_motion_data"
-    / "hot3d"
-    / "hot3d_processed"
-    / "sequence_id=P0002_59a84a3a_seg025"
-    / "robot_name=sharpa_wave"
-)
 
 
 def test_finish_transition_distinguishes_termination_truncation_and_active_worlds():
@@ -45,12 +35,9 @@ def test_finish_transition_distinguishes_termination_truncation_and_active_world
     assert episode_step.numpy().tolist() == [10, 20, 30, 41]
 
 
-@pytest.mark.sequence_data
-def test_base_env_eager_and_captured_transition_agree():
+def test_base_env_eager_and_captured_transition_agree(h2r_setup):
     import warp as wp
 
-    from flash_chord.data.mano_sharpa import load_mano_sharpa
-    from flash_chord.embodiments.sharpa_hands import SharpaHands
     from flash_chord.envs.base import BaseEnv, BaseEnvConfig
     from flash_chord.lifecycle.termination import Termination, TrackingTermination
     from flash_chord.objectives.composition import Objective
@@ -60,26 +47,15 @@ def test_base_env_eager_and_captured_transition_agree():
         ObjectiveTermConfig,
         ShapedObjectiveTermConfig,
     )
-    from flash_chord.runtime.actions import Action, ActionConfig, ResidualHandPoseAction
+    from flash_chord.runtime.actions import Action
+    from flash_chord.h2r.action import H2rActionConfig
     from flash_chord.runtime.delay import TargetDelayConfig
     from flash_chord.runtime.sim import SimConfig
-    from flash_chord.scene.builder import build_scene
-    from flash_chord.scene.collision import CollisionPolicy
 
-    reference = load_mano_sharpa(str(_HOT3D), control_fps=50.0)
-    embodiment = SharpaHands()
     with wp.ScopedDevice("cuda:0"):
-        scene = build_scene(
-            embodiment,
-            reference,
-            world_count=1,
-            collision=CollisionPolicy(robot_scope="none"),
-            decompose_objects=False,
-        )
-        action_strategy = ResidualHandPoseAction.build(
-            scene,
-            config=ActionConfig(delay=TargetDelayConfig(min_steps=2, max_steps=2)),
-        )
+        setup = h2r_setup()
+        scene, reference = setup.scene, setup.reference
+        action_strategy = H2rActionConfig(delay=TargetDelayConfig(min_steps=2, max_steps=2)).build(scene)
         objective_config = ObjectiveConfig(
             object_keypoints=ShapedObjectiveTermConfig(weight=0.0, enabled=False),
             hand_keypoints=ShapedObjectiveTermConfig(weight=0.0, enabled=False),
@@ -96,7 +72,7 @@ def test_base_env_eager_and_captured_transition_agree():
         env = BaseEnv(
             scene,
             reference,
-            config=BaseEnvConfig(sim=SimConfig(fps=50.0, substeps=5), objective=objective_config),
+            config=BaseEnvConfig(sim=SimConfig(fps=30.0, substeps=4, njmax=1024, nconmax=256), objective=objective_config),
             action=action_strategy,
         )
         action = wp.zeros(env.action.action_dim, dtype=wp.float32)

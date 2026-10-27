@@ -20,6 +20,7 @@ from hydra.core.override_parser.overrides_parser import OverridesParser
 from omegaconf import DictConfig
 
 from flash_chord.configuration import instantiate_typed, resolve_path
+from flash_chord.h2r.configuration import require_h2r_input
 from flash_chord.embodiments.base import Embodiment
 from flash_chord.envs.rl import RLEnv, RLEnvConfig
 from flash_chord.evaluation.harness import checkpoint_training_algorithm
@@ -367,6 +368,7 @@ def main(cfg: DictConfig) -> None:
     checkpoint = resolve_path(requested_evaluation.checkpoint)
     metadata = read_checkpoint_metadata(checkpoint)
     saved_config = checkpoint_config(metadata)
+    binding = require_h2r_input(saved_config)
     algorithm = checkpoint_training_algorithm(saved_config)
     if requested_evaluation.use_checkpoint_config:
         parser = OverridesParser.create()
@@ -381,6 +383,7 @@ def main(cfg: DictConfig) -> None:
         print("evaluation config: saved checkpoint metadata with explicit CLI overrides")
     else:
         print("evaluation config: current Hydra composition (checkpoint config disabled)")
+    require_h2r_input(cfg, expected_binding=binding)
     viewer = instantiate_typed(cfg.viewer, ViewerConfig)
     viewer_app = PPOPolicyViewer if algorithm == "ppo" else FlashSACPolicyViewer
     print(f"checkpoint learner: {algorithm}")

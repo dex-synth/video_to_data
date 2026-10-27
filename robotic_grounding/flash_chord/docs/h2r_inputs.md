@@ -2,6 +2,10 @@
 
 `flash_chord.h2r` 消费 h2r 的 human／scene bundle 与 `virtual_wrist_sharpa_wave_bimanual` robot bundle，在方法侧生成原生 MANO 特征、接触、Sharpa IK 和 FlashCHORD 参考。Bench 无需安装本方法的训练依赖。
 
+本 fork 只保留这条共同机器人上的训练配方，`scripts/train_flash_sac.py` 默认选择 `h2r_sharpa_flash_sac`；原生 Sharpa／Dexmate／G1 训练配方和 PPO 训练入口已移除。训练、续训、原生诊断评估与 policy viewer 均先校验 H2R 封存输入，拒绝普通 Parquet、原生 checkpoint 和改变共同输入的覆盖。配方参数保持原 H2R 设置。
+
+本目录不再打包原生 Sharpa、Vega/Dexmate、G1 的 URDF／网格或 SONIC policy，也不保留对应适配器和 G1 专用配置。共享的参考绑定、Sharpa 碰撞映射、动作处理和训练算法继续保留。准备阶段仍从相邻 V2D 的 Sharpa MJCF 读取 IK site 朝向，再把 site 放到共同机器人子树上，并使用共同 fingertip 位置；这项有效依赖不能作为旧资产删除。
+
 这条路径是共同机器人上的任务适配配方：30 Hz 控制、4 个物理子步、1× 示范、每手 6 个标量腕关节与 22 个手指关节。它保留原生手位姿残差、滤波、观测、奖励和训练主体；原生 ball 腕 checkpoint 不能直接复用。
 
 | 入口 | 职责 |
@@ -9,6 +13,8 @@
 | `python -m flash_chord.h2r.prepare` | 共同输入 → 方法特征、IK、封存参考 |
 | `scripts/train_flash_sac.py` | H2R 配方训练，使用 Newton／MuJoCo-Warp |
 | `scripts/evaluate_policy.py`、`scripts/view_policy.py` | 原生环境诊断与可视化 |
+| `scripts/debug/view_robot.py`、`view_scene.py` | `--binding` 指定封存包，显示共同机器人／完整场景 |
+| `scripts/debug/replay.py` | H2R 参考回放，默认零残差、VOC=0；Viser 支持运动学参考预览 |
 | `python -m flash_chord.h2r.evaluation` | 通过 socket 接收 bench 状态、提交机器人位置目标 |
 | `python -m flash_chord.h2r.cpu_evaluation` | 同一共同模型上的独立 CPU 对齐检查 |
 
@@ -63,7 +69,7 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 
 `ReferenceReset` 默认在随机参考帧打开部分手指，并停留至 `voc_decay_steps` 结束。这段准备期仍可使用 VOC=1，即使课程的全局 VOC 已降为零。`reset_to_first_frame_probability` 只改变参考帧采样，不取消准备期，也不恢复完整参考手指姿态。共同评估的首帧显式 reset 则使用精确参考手指、零速度，立即开始运动，不执行这段准备。
 
-因此，训练最后阶段需要覆盖实际部署初始化。`reset.immediate_first_frame_probability` 控制采用精确首帧、完整手指姿态、无等待 reset 的比例；这些 reset 从第一步使用当前课程 VOC。默认值为 0，保留原生采样配方。也可在某一课程阶段设置同名 `immediate_first_frame_probability`，阶段未设置时使用 reset 配置值。H2R 专用课程 `h2r_tracking_250m` 保留原生 VOC 日程和奖励，在最后约 5000 万步将此比例设为 1，此时 VOC=0；原生 `sharpa_flash_sac` 的课程不变。旧 checkpoint 仍按自身保存的配置加载，不会自动采用新课程。
+因此，训练最后阶段需要覆盖实际部署初始化。`reset.immediate_first_frame_probability` 控制采用精确首帧、完整手指姿态、无等待 reset 的比例；这些 reset 从第一步使用当前课程 VOC。默认值为 0，保留原生采样配方。也可在某一课程阶段设置同名 `immediate_first_frame_probability`，阶段未设置时使用 reset 配置值。H2R 专用课程 `h2r_tracking_250m` 保留原生 VOC 日程和奖励，在最后约 5000 万步将此比例设为 1，此时 VOC=0。旧 checkpoint 仍按自身保存的配置加载，不会自动采用新课程。
 
 从已完成 VOC 课程的训练状态继续训练时，可设置 `reset.immediate_first_frame_probability=1.0`，并保留 VOC=0 的末阶段；恢复 `state_*.safetensors`，另存输出和完整配置。该设置不保证旧策略无需适应即可成功，也不会改写 checkpoint 中保存的旧配置。不能通过在共同评估端增加准备时间来替代这项训练覆盖。
 

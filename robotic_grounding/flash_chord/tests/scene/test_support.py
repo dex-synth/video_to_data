@@ -87,18 +87,11 @@ def Cube "tabletop"
     assert builder.joint_type == [newton.JointType.FIXED]
 
 
-@pytest.mark.sequence_data
-def test_build_scene_includes_support():
+def test_build_scene_includes_support(h2r_setup):
     import warp as wp
 
-    from flash_chord.data.mano_sharpa import load_mano_sharpa
-    from flash_chord.embodiments.sharpa_hands import SharpaHands
-    from flash_chord.scene.builder import build_scene
-
-    ref = load_mano_sharpa(str(_HOT3D))
-    support = support_usda_path("hot3d", "P0002_59a84a3a_seg025")
     with wp.ScopedDevice("cuda:0"):
-        scene = build_scene(SharpaHands(), ref, world_count=1, support_usda=support)
-    assert scene.support_shape_count == 2
+        scene = h2r_setup().scene
+    assert scene.support_shape_count == 1
     assert scene.support is not None
     assert scene.support.shapes == scene.collision_layout.support

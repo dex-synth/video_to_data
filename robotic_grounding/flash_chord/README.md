@@ -1,8 +1,8 @@
 # FlashCHORD
 
-GPU-parallel robotic reference tracking with Newton, Warp, JAX, PPO, and FlashSAC.
+FlashCHORD fork for h2r_bench: train FlashSAC on sealed benchmark inputs with Newton, Warp, and JAX.
 
-**[Setup](#setup) → [Data](#example-data) → [View robot](#1-view-robot) → [View scene](#2-view-scene) → [Replay](#3-replay) → [Train](#4-train) → [Evaluate](#5-evaluate) → [View policy](#6-view-policy)** · **[Configuration](#configuration)**
+**[Setup](#setup) → [H2R inputs](#h2r-inputs) → [Train](#train) → [Evaluate and view](#evaluate-and-view)**
 
 ## Setup
 
@@ -11,7 +11,7 @@ GPU-parallel robotic reference tracking with Newton, Warp, JAX, PPO, and FlashSA
 - Linux and NVIDIA driver **580 or newer**.
 - [Docker](https://docs.docker.com/engine/install/ubuntu/) with [non-root access](https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user) and [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
 - Git LFS; access to the repository, `nvidia/cuda`, and `ghcr.io/astral-sh/uv`.
-- Full training: **48 GiB GPU with ≥46,000 MiB free**, as validated in EVT-07. Replay and one-world viewing use less memory.
+- Training memory depends on the common scene and world count. Replay and one-world viewing use less memory.
 
 ### Run in the container
 
@@ -53,6 +53,17 @@ uv pip install -e ".[train,dev]"
 
 ### Debug visualization
 
+The debug tools read the same sealed package as training:
+
+```bash
+python scripts/debug/view_robot.py --binding "$PREPARED/h2r_binding.json" --viewer viser
+python scripts/debug/view_scene.py --binding "$PREPARED/h2r_binding.json" --viewer viser
+python scripts/debug/replay.py "task.parquet=$PREPARED/h2r_binding.json" viewer.backend=viser start_paused=true
+```
+
+Replay defaults to zero residual and VOC=0. The Viser controls can also display the kinematic reference.
+These are visualization/diagnostic tools, not benchmark scores.
+
 Change `markers.enabled=false` to `markers.enabled=true` in replay/policy commands to show axes, keypoints, and contacts.
 
 | Markers | Reference target | Simulation |
@@ -60,203 +71,54 @@ Change `markers.enabled=false` to `markers.enabled=true` in replay/policy comman
 | Hand keypoints | Green | Blue |
 | Contacts / normals | Yellow | Magenta |
 
-- **Tracking tolerances:** see [Sharpa](src/flash_chord/configs/termination/tracking.yaml) and [G1](src/flash_chord/configs/termination/recon_body.yaml) for wrist/palm, object, and body tracking limits.
+- Training termination thresholds are in [tracking.yaml](src/flash_chord/configs/termination/tracking.yaml). Benchmark success is scored independently by h2r_bench.
 
-## Example data
+## H2R inputs
 
-For h2r_bench human/scene bundles and the common bimanual Sharpa Wave robot, see the [H2R workflow](docs/h2r_inputs.md): input preparation, training, native playback, and common evaluation. It uses the common assets and scalar virtual wrists at 30 Hz.
+This fork exposes one training recipe: `h2r_sharpa_flash_sac`. It requires a sealed `h2r_binding.json`
+prepared from h2r_bench human/scene and `virtual_wrist_sharpa_wave_bimanual` robot bundles.
+See [H2R preparation and deployment](docs/h2r_inputs.md) for the preparation command and independent environments.
 
-Both examples ship under the sibling `source/robotic_grounding/robotic_grounding/assets` tree, mounted read-only at `/v2d/assets`:
+The common input fixes the complete 56-coordinate robot, articulated object, finite support, source window,
+1× speed and 30 Hz / four physics substeps. Ordinary Parquet files and native robot recipes are rejected.
+Method-specific IK, contacts, FlashSAC, rewards and VOC training curriculum remain in this codebase.
 
-```text
-/v2d/assets/human_motion_data/
-├── ego_recon/processed/sequence_id=tissue_box_simple/robot_name=sharpa_wave/
-└── whole_body/soma/sequence_id=2026-03-06_10-24-18_snack_box_pick_and_place_01/robot_name=g1/
-```
-
-```bash
-# Inside the container. Keep these variables for the following steps.
-SHARPA_PARQUET=/v2d/assets/human_motion_data/ego_recon/processed/sequence_id=tissue_box_simple/robot_name=sharpa_wave
-G1_PARQUET=/v2d/assets/human_motion_data/whole_body/soma/sequence_id=2026-03-06_10-24-18_snack_box_pick_and_place_01/robot_name=g1/data.parquet
-```
-
-- External data: set `V2D_ASSETS_DIR=/absolute/path/to/assets` on the host **before starting a new container**.
-- Include `human_motion_data/` and object/support assets. [Asset resolution](V2D_INTEGRATION.md#local-data-visibility). Full corpora are supplied separately.
-
-## 1. View robot
+## Train
 
 ```bash
-python scripts/debug/view_robot.py --embodiment sharpa_hands --viewer viser
-# Stop the first viewer, then:
-python scripts/debug/view_robot.py --embodiment g1_dex3 --viewer viser
+# Set PREPARED to the directory produced by flash_chord.h2r.prepare.
+python scripts/train_flash_sac.py \
+  "task.parquet=${PREPARED}/h2r_binding.json" \
+  reset.seed=42 logging.mode=disabled output_dir=/path/to/new-training-output
 ```
 
-| Floating Sharpa | G1 + Dex3 |
-| --- | --- |
-| ![Floating Sharpa robot, camera orbit](docs/media/sharpa_robot.gif) | ![G1 and Dex3 robot, camera orbit](docs/media/g1_robot.gif) |
+The default is `experiment=h2r_sharpa_flash_sac`; specifying it explicitly is equivalent.
+The recipe uses 4,096 worlds and 250,003,456 environment steps. The network, optimizer and curriculum
+are defined in the [standalone H2R recipe](src/flash_chord/configs/experiment/h2r_sharpa_flash_sac.yaml).
+Use `--cfg job --resolve` to inspect the configuration without starting training.
 
-Default robot poses; only the camera moves.
+Native Sharpa, Dexmate and G1 recipes, bundled robot models/meshes, their adapters, SONIC policies,
+and the PPO training script have been removed.
+Training checks the sealed input before constructing the environment. Resume also requires an H2R checkpoint
+bound to the same input. The shared algorithm and geometry modules remain implementation components.
 
-## 2. View scene
-
-```bash
-python scripts/debug/view_scene.py --parquet "${SHARPA_PARQUET}" \
-  --embodiment sharpa_hands --frame 0 --viewer viser
-
-# G1: open the SONIC scene, paused at frame 0.
-python scripts/debug/replay.py --config-name=sonic_replay \
-  "task.parquet='${G1_PARQUET}'" viewer.backend=viser start_paused=true markers.enabled=false
-```
-
-| Sharpa tissue-box, frame 0 | G1 snack-box, frame 0 |
-| --- | --- |
-| ![Sharpa tissue-box reference scene at frame zero](docs/media/sharpa_scene.gif) | ![G1 snack-box reference scene at frame zero](docs/media/g1_scene.gif) |
-
-Check the robot, object, and support surface. Only the camera moves.
-
-## 3. Replay
+## Evaluate and view
 
 ```bash
-python scripts/debug/replay.py "task.parquet='${SHARPA_PARQUET}'" \
-  viewer.backend=viser +start_paused=true markers.enabled=false
-
-python scripts/debug/replay.py --config-name=sonic_replay \
-  "task.parquet='${G1_PARQUET}'" viewer.backend=viser start_paused=true markers.enabled=false
-```
-
-Wait for **“Replay kernels are ready”**, then click **Show kinematic reference** to play the recorded robot/object poses without physics.
-
-| Button | Result |
-| --- | --- |
-| **Show kinematic reference** | Recorded robot/object poses, without physics |
-| **Run configured replay** | Controller-driven physical replay; task success is not guaranteed |
-
-- Each button starts at frame 0 and pauses at the final pose; `start_paused` requires Viser.
-- Generic config: `+start_paused=true` adds the key. `sonic_replay`: `start_paused=true` overrides its existing default.
-
-| Sharpa kinematic reference | G1 kinematic reference |
-| --- | --- |
-| ![Sharpa tissue-box kinematic reference](docs/media/sharpa_reference.gif) | ![G1 snack-box kinematic reference](docs/media/g1_reference.gif) |
-
-## 4. Train
-
-Run one full recipe at a time on the selected GPU:
-
-```bash
-python scripts/train_flash_sac.py experiment=sharpa_flash_sac \
-  "task.parquet='${SHARPA_PARQUET}'" reset.seed=42 logging.mode=disabled \
-  output_dir=outputs/sharpa_full
-
-python scripts/train_flash_sac.py experiment=g1_recon_body_flash_sac \
-  "task.parquet='${G1_PARQUET}'" reset.seed=42 logging.mode=disabled \
-  output_dir=outputs/g1_full
-```
-
-| Recipe | Terminal environment steps | Final actor checkpoint |
-| --- | ---: | --- |
-| Sharpa FlashSAC | 250,003,456 | `outputs/sharpa_full/policy_250003456.safetensors` |
-| G1 FlashSAC | 349,999,104 | `outputs/g1_full/policy_349999104.safetensors` |
-
-- Expect compilation, progress through **100%**, and the final checkpoint path.
-- `/workspace/outputs` persists under the host's `robotic_grounding/flash_chord/outputs`.
-- Without `output_dir`, checkpoints use Hydra's run directory, printed at startup.
-- FlashSAC: `policy_<steps>.safetensors` for evaluation; `state_<steps>.safetensors` for resume. PPO: `model_<iteration>.safetensors`.
-
-## 5. Evaluate
-
-```bash
-# Select the checkpoint produced above; repeat for the other task.
-CHECKPOINT=outputs/sharpa_full/policy_250003456.safetensors
-# CHECKPOINT=outputs/g1_full/policy_349999104.safetensors
-
 python scripts/evaluate_policy.py "evaluation.checkpoint=${CHECKPOINT}" \
-  evaluation.world_count=4096 "evaluation.metrics_output=${CHECKPOINT}.metrics.json"
-```
-
-The checkpoint restores its training configuration and reference; incompatible metadata is rejected.
-
-**MPPE (`metrics.mppe_cm`):** mean per-frame object pose error in cm, using six body-local keypoints at ±5 cm along X/Y/Z. Average keypoint distances per body, take the maximum across bodies per frame, then average over frames and finite simulation worlds. Lower is better.
-
-## 6. View policy
-
-```bash
+  evaluation.world_count=2 evaluation.metrics_output=/path/to/diagnostic.json logging.mode=disabled
 python scripts/view_policy.py "evaluation.checkpoint=${CHECKPOINT}" \
-  viewer.backend=viser markers.enabled=false
+  viewer.backend=viser markers.enabled=false logging.mode=disabled
 ```
 
-| Trained Sharpa tissue-box policy | Trained G1 snack-box policy |
-| --- | --- |
-| ![Trained Sharpa tissue-box pick-and-place policy](docs/media/sharpa_policy.gif) | ![Trained G1 snack-box pick-and-place policy](docs/media/g1_policy.gif) |
-
-Watch **at least five full loops**. Expect pick-and-place followed by a restart at frame 0. [Reset options](docs/configuration.md#policy-resets).
-
-GIFs show the seed-42 terminal actors from release validation. [Media provenance](docs/media/README.md).
+Both applications restore the checkpoint configuration and require H2R inputs. Native checkpoints are rejected,
+and input-changing overrides cannot replace the trained reference. Historical checkpoint files are not modified.
+These commands are method-environment diagnostics. Formal physical rollouts and scores belong to h2r_bench;
+use the external controller described in the [H2R workflow](docs/h2r_inputs.md).
 
 ## Configuration
 
-Start with an [experiment recipe](src/flash_chord/configs/experiment/); its `defaults` select the Hydra configuration groups below.
-
-| What to change | YAML under [configs/](src/flash_chord/configs/) | Implementation |
-| --- | --- | --- |
-| Reference data and motion timing | [task/](src/flash_chord/configs/task/) | [data/](src/flash_chord/data/) |
-| Rewards: terms, weights, shaping | [objective/](src/flash_chord/configs/objective/) | [objectives/](src/flash_chord/objectives/) |
-| Tracking tolerances and terminations | [Sharpa](src/flash_chord/configs/termination/tracking.yaml), [G1](src/flash_chord/configs/termination/recon_body.yaml) | [termination.py](src/flash_chord/lifecycle/termination.py) |
-| Episode resets and reset events | [reset/](src/flash_chord/configs/reset/) | [reset.py](src/flash_chord/lifecycle/reset.py) |
-| Curriculum and scheduled changes | [curriculum/](src/flash_chord/configs/curriculum/) | [curriculum.py](src/flash_chord/lifecycle/curriculum.py) |
-| Scene randomization, objects, collisions | [scene/](src/flash_chord/configs/scene/), [collision/](src/flash_chord/configs/collision/) | [scene/](src/flash_chord/scene/) |
-| Physics, control rate, `njmax`, `nconmax` | [sim/](src/flash_chord/configs/sim/) | [sim.py](src/flash_chord/runtime/sim.py) |
-| Replay mode and assistance | [replay/](src/flash_chord/configs/replay/) | [replay.py](src/flash_chord/runtime/replay.py) |
-| Robot assets and policy actions | [embodiment/](src/flash_chord/configs/embodiment/), [action/](src/flash_chord/configs/action/) | [embodiments/](src/flash_chord/embodiments/), [actions/](src/flash_chord/runtime/actions/) |
-| Policy observations | [observation/](src/flash_chord/configs/observation/) | [envs/](src/flash_chord/envs/) |
-| Environment and object assistance | [env/](src/flash_chord/configs/env/) | [envs/](src/flash_chord/envs/), [object_control.py](src/flash_chord/runtime/object_control.py) |
-| Learner, checkpoints, logging | [training/](src/flash_chord/configs/training/), [logging/](src/flash_chord/configs/logging/) | [training/](src/flash_chord/training/) |
-| Evaluation, viewers, debug markers | [evaluation/](src/flash_chord/configs/evaluation/), [viewer/](src/flash_chord/configs/viewer/), [markers/](src/flash_chord/configs/markers/) | [evaluation/](src/flash_chord/evaluation/), [visualization/](src/flash_chord/visualization/) |
-
-- **Events:** use `reset/` for episode initialization, `scene/` for scene-build randomization, and `curriculum/` for scheduled changes.
-- **Reward weights/reset probabilities:** curriculum stages can override the base `objective/` and `reset/` settings.
-- **Overrides:** append `key=value`, e.g. `scene.world_count=1024`. Sharpa and G1 use different groups; inspect the selected recipe first.
-
-Print the composed configuration without starting training:
-
-```bash
-python scripts/train_flash_sac.py experiment=sharpa_flash_sac --cfg job --resolve
-python scripts/train_flash_sac.py experiment=g1_recon_body_flash_sac --cfg job --resolve
-```
-
-More: [recipes and overrides](docs/configuration.md) · [checkpoints](src/flash_chord/training/README.md) · [package structure](docs/package_structure.md) · [V2D integration](V2D_INTEGRATION.md).
-
-## OSMO workflows
-
-The optional [workflow templates](workflow/) run PPO, FlashSAC, and checkpoint
-evaluation on an OSMO deployment. Build the Docker image above and push it to a
-registry your workers can access. Supply `image` and `output_url` through
-[OSMO template overrides](https://nvidia.github.io/OSMO/main/user_guide/tutorials/template_and_tokens.html);
-these settings have no defaults in the templates.
-
-For example, from this directory on the submission host:
-
-```bash
-osmo workflow submit workflow/train_flash_sac.yaml --set \
-  image=registry.example.com/your-team/flash-chord:latest \
-  output_url=s3://your-bucket/flash-chord \
-  parquet=/path/available/in/the/container/data.parquet
-```
-
-Replace the example image, bucket, and reference path with your deployment's
-values. Configure storage credentials and the `wandb_credential` named in the
-template. Evaluation also needs your W&B `entity`, `project`, and `run_id` (or an
-explicit `checkpoint_artifact`). The local Docker workflow above needs no OSMO
-service or remote storage.
-
-## Development
-
-```bash
-pytest
-ruff check .
-```
-
-Sequence-backed tests require local `src/flash_chord/assets/human_motion_data`; otherwise they skip.
-
-## License
-
-Copyright © 2026 NVIDIA Corporation and affiliates. Licensed under the Apache License, Version 2.0.
+See the [configuration guide](docs/configuration.md) and [package structure](docs/package_structure.md).
+Hyperparameters can be overridden for an explicitly identified experiment. Common task speed, source window,
+robot, scale and support remain fixed by the sealed package. Choosing H2R inputs does not by itself equalize
+training budgets or make different task windows comparable.

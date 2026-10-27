@@ -1,16 +1,18 @@
 defaults:
-  - task: default
-  - sim: replay
-  - scene: replay
-  - collision: physical
-  - embodiment: sharpa_hands
-  - action: residual_hand_pose
+  - train_flash_sac
   - replay: physical
   - markers: default
   - viewer: default
   - _self_
 
 device: cuda:0
+start_paused: false
+
+scene:
+  world_count: 1
+
+replay:
+  voc_scale: 0.0
 
 hydra:
   job:

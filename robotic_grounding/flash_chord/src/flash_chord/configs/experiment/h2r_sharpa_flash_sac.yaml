@@ -1,13 +1,23 @@
 # @package _global_
 # Explicit H2R adaptation: 1x source motion, 30 Hz control, scalar virtual wrists.
 defaults:
-  - sharpa_flash_sac
+  - override /sim: rl
+  - override /scene: train
+  - override /collision: training
   - override /embodiment: h2r_sharpa_hands
+  - override /action: residual_hand_pose
+  - override /observation: policy
+  - override /objective: tracking
+  - override /termination: tracking
+  - override /reset: reference
+  - override /env: rl
   - override /curriculum: h2r_tracking_250m
+  - override /training: reference_flash_sac
   - _self_
 
 task:
   motion_speed: 1.0
+  source_frame_playback: false
   motion_start_frame: 0
   motion_end_frame: -1
 sim:
@@ -16,6 +26,7 @@ sim:
   # Extra constraint capacity for the common robot and detailed object collisions.
   njmax: 1024
 scene:
+  world_count: 4096
   support: true
   decompose_objects: false
   object_scale_min: 1.0
@@ -25,5 +36,30 @@ collision:
   robot_support_collision: true
 action:
   _target_: flash_chord.h2r.action.H2rActionConfig
+  input_mode: normalized
+  normalized_mapping: rational
+training:
+  total_environment_steps: 250003456
+  updates_per_collection: 8.0
+  resume: false
+  checkpoint_path: null
+  network:
+    actor_hidden_dim: 256
+    critic_hidden_dim: 512
+    initial_normalized_std: 0.1
+    log_std_max: -1.8971199848858813
+  optimization:
+    actor_learning_rate_multiplier: 1.0
+    residual_mean_learning_rate_multiplier: 0.1
+  replay:
+    capacity: 4194304
+    minimum_size: 409600
+  exploration:
+    target_sigma: 0.1
+  checkpoint:
+    save_interval_environment_steps: 10000384
+    load_replay_path: null
 logging:
+  experiment: sharpa
   run_name: h2r_sharpa_flash_sac
+  log_interval: 25

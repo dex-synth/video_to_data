@@ -5,65 +5,17 @@
 import numpy as np
 import pytest
 
-from flash_chord.assets import ASSETS_DIR
 
 pytestmark = pytest.mark.gpu
 
-_HOT3D = (
-    ASSETS_DIR
-    / "human_motion_data"
-    / "hot3d"
-    / "hot3d_processed"
-    / "sequence_id=P0002_59a84a3a_seg025"
-    / "robot_name=sharpa_wave"
-)
-_VEGA_MIXER = (
-    ASSETS_DIR
-    / "human_motion_data"
-    / "arctic"
-    / "arctic_processed"
-    / "sequence_id=dataset_s01_mixer_use_01"
-    / "robot_name=vega_sharpa"
-    / "data.parquet"
-)
 
-
-def _build_vega_rl_env(*extra_overrides, config_name="train"):
-    from flash_chord.configuration import compose_config, instantiate_typed
-    from flash_chord.embodiments.base import Embodiment
+def _build_h2r_rl_env(h2r_setup, h2r_config, *extra_overrides):
+    from flash_chord.configuration import instantiate_typed
     from flash_chord.envs.rl import RLEnv, RLEnvConfig
-    from flash_chord.scene.collision import CollisionPolicy
-    from flash_chord.scene.setup import setup_scene
 
-    config = compose_config(
-        config_name,
-        overrides=(
-            f"task.parquet='{_VEGA_MIXER}'",
-            "task.motion_speed=0.5",
-            "scene.world_count=2",
-            "scene.decompose_objects=false",
-            "embodiment=dexmate_sharpa",
-            "action=residual_joint_position",
-            "observation=articulated_arm",
-            "collision=manipulation",
-            "env.auto_reset=false",
-            *extra_overrides,
-        ),
-    )
-    environment_config = instantiate_typed(config.env, RLEnvConfig)
-    embodiment = instantiate_typed(config.embodiment, Embodiment)
-    collision = instantiate_typed(config.collision, CollisionPolicy)
-    setup = setup_scene(
-        parquet=config.task.parquet,
-        control_fps=environment_config.sim.fps,
-        motion_speed=config.task.motion_speed,
-        embodiment=embodiment,
-        collision=collision,
-        world_count=config.scene.world_count,
-        include_support=config.scene.support,
-        decompose_objects=config.scene.decompose_objects,
-    )
-    return setup, RLEnv(setup.scene, setup.reference, config=environment_config)
+    config = h2r_config("env.auto_reset=false", *extra_overrides)
+    setup = h2r_setup(2)
+    return setup, RLEnv(setup.scene, setup.reference, config=instantiate_typed(config.env, RLEnvConfig))
 
 
 def test_publish_rl_transition_preserves_outputs_and_episode_metrics():
@@ -115,8 +67,7 @@ def test_publish_rl_transition_preserves_outputs_and_episode_metrics():
 
 
 @pytest.mark.slow
-@pytest.mark.sequence_data
-def test_vega_rl_eager_capture_and_zero_copy_jax_parity():
+def test_h2r_rl_eager_capture_and_zero_copy_jax_parity(h2r_setup, h2r_config):
     import jax
     import jax.numpy as jnp
     import warp as wp
@@ -125,21 +76,14 @@ def test_vega_rl_eager_capture_and_zero_copy_jax_parity():
     from flash_chord.training.environment import WarpRLEnv
 
     with wp.ScopedDevice("cuda:0"):
-        setup, eager_env = _build_vega_rl_env(
-            "collision=kinematic",
-            "scene.support=false",
-            "observation.object_body_velocity.enabled=true",
+        setup, eager_env = _build_h2r_rl_env(h2r_setup, h2r_config,
             "env.critic_context.object_body_velocity=false",
-            config_name="train_flash_sac",
         )
         reference = setup.reference
-        assert reference.fps == 20.0
-        assert setup.support_usda is None
-        assert eager_env.observation_dim == 778
-        velocity_block = eager_env.observation_strategy.block_names.index("object_body_velocity_w_mps_radps")
-        assert eager_env.observation_strategy.block_ranges[velocity_block] == (170, 182)
+        assert reference.fps == 30.0
+        assert setup.support_usda is not None
+        assert eager_env.action.action_dim == 56
         assert len(eager_env.critic_context_names) == 4
-        assert eager_env.observation_dim + len(eager_env.critic_context_names) + eager_env.action.action_dim == 840
         captured_env = RLEnv(setup.scene, reference, config=eager_env.config)
         jax_native_env = RLEnv(setup.scene, reference, config=eager_env.config)
         action = wp.zeros(2 * eager_env.action.action_dim, dtype=wp.float32)
@@ -191,8 +135,7 @@ def test_vega_rl_eager_capture_and_zero_copy_jax_parity():
 
 
 @pytest.mark.slow
-@pytest.mark.sequence_data
-def test_vega_zero_voc_leaves_object_articulation_passive():
+def test_h2r_zero_voc_leaves_object_articulation_passive(h2r_setup, h2r_config):
     import jax
     import jax.numpy as jnp
     import newton
@@ -201,7 +144,7 @@ def test_vega_zero_voc_leaves_object_articulation_passive():
     from flash_chord.training.environment import WarpRLEnv
 
     with wp.ScopedDevice("cuda:0"):
-        _, env = _build_vega_rl_env("env.voc_scale=0.0", "reset.voc_decay_steps=0")
+        _, env = _build_h2r_rl_env(h2r_setup, h2r_config, "env.voc_scale=0.0", "reset.voc_decay_steps=0")
         action = wp.zeros(2 * env.action.action_dim, dtype=wp.float32)
         articulation_q_ids = np.asarray(env.command.layout.articulation_q_ids)
         articulation_dof_ids = np.asarray(env.command.layout.articulation_dof_ids)
@@ -218,8 +161,8 @@ def test_vega_zero_voc_leaves_object_articulation_passive():
             assert env.object_joint_drive is not None
             armature = env.solver.mjw_model.dof_armature.numpy()
             friction = env.solver.mjw_model.dof_frictionloss.numpy()
-            np.testing.assert_allclose(armature[:, articulation_dof_ids], 0.01)
-            np.testing.assert_allclose(friction[:, articulation_dof_ids], 0.1)
+            np.testing.assert_allclose(armature[:, articulation_dof_ids], 0.0)
+            np.testing.assert_allclose(friction[:, articulation_dof_ids], 0.0)
             position_ids = env.object_joint_drive.position_actuator_ids.numpy()
             velocity_ids = env.object_joint_drive.velocity_actuator_ids.numpy()
             actuator_ids = np.concatenate((position_ids, velocity_ids))
@@ -238,19 +181,19 @@ def test_vega_zero_voc_leaves_object_articulation_passive():
         env.step(action)
         assert_articulation_drive_is_passive()
 
-        env.reset(frame_id=200)
+        env.reset(frame_id=100)
         displace_object_articulations()
         env.step(action)
         assert_articulation_drive_is_passive()
 
-        env.reset(frame_id=200)
+        env.reset(frame_id=100)
         env.capture_step()
-        env.reset(frame_id=200)
+        env.reset(frame_id=100)
         displace_object_articulations()
         env.step()
         assert_articulation_drive_is_passive()
 
-        env.reset(frame_id=200)
+        env.reset(frame_id=100)
         displace_object_articulations()
         jax_env = WarpRLEnv(env, publish_diagnostics=False)
         step = jax_env.step(jnp.zeros((env.world_count, env.action.action_dim), dtype=jnp.float32))
@@ -259,16 +202,13 @@ def test_vega_zero_voc_leaves_object_articulation_passive():
 
 
 @pytest.mark.slow
-@pytest.mark.sequence_data
-def test_rl_env_auto_reset_preserves_transition_outputs_and_capture():
+def test_rl_env_auto_reset_preserves_transition_outputs_and_capture(h2r_setup, h2r_config):
     import warp as wp
 
-    from flash_chord.data.mano_sharpa import load_mano_sharpa
-    from flash_chord.embodiments.sharpa_hands import SharpaHands
     from flash_chord.envs.rl import RLEnv, RLEnvConfig
     from flash_chord.lifecycle.termination import ThresholdTerminationTermConfig, TrackingTerminationConfig
-    from flash_chord.scene.builder import build_scene
-    from flash_chord.scene.collision import CollisionPolicy
+    from flash_chord.h2r.action import H2rActionConfig
+    from flash_chord.runtime.sim import SimConfig
 
     class _ConstantObjective:
         def __init__(self, values):
@@ -283,24 +223,18 @@ def test_rl_env_auto_reset_preserves_transition_outputs_and_capture():
         def reset(self, reset_mask):
             pass
 
-    reference = load_mano_sharpa(str(_HOT3D), control_fps=50.0)
-    embodiment = SharpaHands()
     termination = TrackingTerminationConfig(
         wrist_position=ThresholdTerminationTermConfig(threshold=0.0, enabled=False),
         wrist_orientation=ThresholdTerminationTermConfig(threshold=0.0, enabled=False),
         object_position=ThresholdTerminationTermConfig(threshold=0.0, enabled=False),
         object_orientation=ThresholdTerminationTermConfig(threshold=0.0, enabled=False),
     )
-    config = RLEnvConfig(termination=termination, objective=None)
+    config = RLEnvConfig(termination=termination, objective=None, action=H2rActionConfig(),
+                        sim=SimConfig(fps=30, substeps=4, njmax=1024, nconmax=256))
 
     with wp.ScopedDevice("cuda:0"):
-        scene = build_scene(
-            embodiment,
-            reference,
-            world_count=2,
-            collision=CollisionPolicy(robot_scope="none"),
-            decompose_objects=False,
-        )
+        setup = h2r_setup(2)
+        scene, reference = setup.scene, setup.reference
         env = RLEnv(
             scene,
             reference,
@@ -390,16 +324,13 @@ def test_rl_env_auto_reset_preserves_transition_outputs_and_capture():
 
 
 @pytest.mark.slow
-@pytest.mark.sequence_data
-def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable():
+def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable(h2r_setup, h2r_config):
     import warp as wp
 
-    from flash_chord.data.mano_sharpa import load_mano_sharpa
-    from flash_chord.embodiments.sharpa_hands import SharpaHands
     from flash_chord.envs.rl import CriticContextConfig, RLEnv, RLEnvConfig
     from flash_chord.lifecycle.termination import ThresholdTerminationTermConfig, TrackingTerminationConfig
-    from flash_chord.scene.builder import build_scene
-    from flash_chord.scene.collision import CollisionPolicy
+    from flash_chord.h2r.action import H2rActionConfig
+    from flash_chord.runtime.sim import SimConfig
 
     class _ConstantObjective:
         def __init__(self, values):
@@ -414,8 +345,6 @@ def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable():
         def reset(self, reset_mask):
             pass
 
-    reference = load_mano_sharpa(str(_HOT3D), control_fps=50.0)
-    embodiment = SharpaHands()
     termination = TrackingTerminationConfig(
         wrist_position=ThresholdTerminationTermConfig(threshold=0.0, enabled=False),
         wrist_orientation=ThresholdTerminationTermConfig(threshold=0.0, enabled=False),
@@ -425,18 +354,15 @@ def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable():
     config = RLEnvConfig(
         termination=termination,
         objective=None,
+        action=H2rActionConfig(),
+        sim=SimConfig(fps=30, substeps=4, njmax=1024, nconmax=256),
         capture_terminal_state=True,
         critic_context=CriticContextConfig(reference_phase=True, object_body_velocity=True),
     )
 
     with wp.ScopedDevice("cuda:0"):
-        scene = build_scene(
-            embodiment,
-            reference,
-            world_count=2,
-            collision=CollisionPolicy(robot_scope="none"),
-            decompose_objects=False,
-        )
+        setup = h2r_setup(2)
+        scene, reference = setup.scene, setup.reference
         env = RLEnv(
             scene,
             reference,
@@ -518,5 +444,5 @@ def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable():
         }
 
     for name in eager:
-        tolerance = 1.0e-4 if "critic_context" in name else 1.0e-6
-        np.testing.assert_allclose(captured[name], eager[name], atol=tolerance)
+        # The common scene retains contacts; GPU contact reductions are not bitwise deterministic.
+        np.testing.assert_allclose(captured[name], eager[name], atol=1.0e-4, rtol=1.0e-5)

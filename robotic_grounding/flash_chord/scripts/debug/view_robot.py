@@ -1,28 +1,21 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Load an embodiment and display it at its default pose in the Newton viewer.
-
-python scripts/debug/view_robot.py --embodiment sharpa_hands
-python scripts/debug/view_robot.py --embodiment dexmate_sharpa --viewer gl
-"""
+"""Display the common robot from a sealed H2R preparation package."""
 
 import newton
 
-# import the concrete embodiments so they register in EMBODIMENT_REGISTRY
-import flash_chord.embodiments.g1_dex3
-import flash_chord.embodiments.sharpa_hands  # noqa: F401
-import flash_chord.embodiments.vega_sharpa  # noqa: F401
-from flash_chord.embodiments.base import EMBODIMENT_REGISTRY, get_embodiment
+from flash_chord.h2r.builder import CommonModelBuilder
+from flash_chord.h2r.robot import H2rSharpaHands
 from flash_chord.visualization.viewer import ViewerApp
 
 
 class ViewRobot(ViewerApp):
-    """Build one copy of an embodiment and show it at its default joint pose (static)."""
+    """Show the common robot at its default joint pose."""
 
     def __init__(self, viewer, args):
         super().__init__(viewer, args)
-        embodiment = get_embodiment(args.embodiment)()
-        builder = newton.ModelBuilder()
+        embodiment = H2rSharpaHands(args.binding)
+        builder = CommonModelBuilder(gravity=-9.81)
         embodiment.build(builder)
         self.model = builder.finalize()
         self.state = self.model.state()
@@ -31,11 +24,7 @@ class ViewRobot(ViewerApp):
 
     @staticmethod
     def add_arguments(parser):
-        parser.add_argument(
-            "--embodiment",
-            default="sharpa_hands",
-            help=f"registered embodiment name; one of {sorted(EMBODIMENT_REGISTRY)}",
-        )
+        parser.add_argument("--binding", required=True, help="prepared h2r_binding.json")
 
 
 if __name__ == "__main__":

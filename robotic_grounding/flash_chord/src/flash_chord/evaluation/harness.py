@@ -37,6 +37,7 @@ from flash_chord.evaluation.rollout import (
     record_object_pose_rollout,
     write_object_trajectories_parquet,
 )
+from flash_chord.h2r.configuration import require_h2r_input
 from flash_chord.lifecycle.curriculum import CurriculumStage
 from flash_chord.scene.collision import CollisionPolicy
 from flash_chord.scene.setup import setup_scene
@@ -376,6 +377,7 @@ def evaluate_checkpoint(
     checkpoint_path = Path(checkpoint).expanduser().resolve()
     metadata = read_checkpoint_metadata(checkpoint_path)
     saved = checkpoint_config(metadata)
+    binding = require_h2r_input(saved)
 
     algorithm = checkpoint_training_algorithm(saved)
     config = saved
@@ -391,6 +393,7 @@ def evaluate_checkpoint(
     config["task"]["parquet"] = _resolve_parquet(config, Path(source_root) if source_root else None)
 
     cfg = OmegaConf.create(config)
+    require_h2r_input(cfg, expected_binding=binding)
     env_config = instantiate_typed(cfg.env, RLEnvConfig)
     embodiment = instantiate_typed(cfg.embodiment, Embodiment)
     collision = instantiate_typed(cfg.collision, CollisionPolicy)

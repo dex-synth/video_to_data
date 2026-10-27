@@ -1,164 +1,116 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Release-recipe and current-schema configuration tests."""
+"""Public H2R recipe composition and rejected legacy training selections."""
 
 from pathlib import Path
 
 import pytest
+from hydra.errors import MissingConfigException
 from omegaconf import MissingMandatoryValue
 
-from flash_chord.configuration import compose_config, instantiate_typed, resolve_path
+from flash_chord.configuration import compose_config, instantiate_typed, resolve_path, resolved_dict
 from flash_chord.evaluation.view import PolicyViewConfig
-from flash_chord.training.flash_sac.config import TrainingConfig as FlashSACTrainingConfig
-from flash_chord.training.ppo.config import TrainingConfig as PPOTrainingConfig
+from flash_chord.h2r.configuration import require_h2r_input
+from flash_chord.training.flash_sac.config import TrainingConfig
 from flash_chord.visualization.viewer import ViewerConfig
 
-_PARQUET = "task.parquet=/tmp/reference.parquet"
+_BINDING = "task.parquet=/tmp/h2r_binding.json"
 
 
-@pytest.mark.parametrize(
-    ("root", "experiment", "training_type", "world_count", "input_mode", "mapping"),
-    (
-        ("train", "sharpa_ppo", PPOTrainingConfig, 4096, "raw", "linear"),
-        ("train_flash_sac", "sharpa_flash_sac", FlashSACTrainingConfig, 4096, "normalized", "rational"),
-        (
-            "train_flash_sac",
-            "dexmate_sharpa_flash_sac",
-            FlashSACTrainingConfig,
-            2048,
-            "normalized",
-            "rational",
-        ),
-        ("train", "g1_recon_body_ppo", PPOTrainingConfig, 4096, "raw", "linear"),
-        ("train_flash_sac", "g1_recon_body_flash_sac", FlashSACTrainingConfig, 2048, "raw", "linear"),
-    ),
-)
-def test_public_training_recipes_compose(
-    root,
-    experiment,
-    training_type,
-    world_count,
-    input_mode,
-    mapping,
-):
-    config = compose_config(root, [f"experiment={experiment}", _PARQUET])
-    training = instantiate_typed(config.training, training_type)
-
-    assert config.task.parquet == "/tmp/reference.parquet"
-    assert config.scene.world_count == world_count
-    assert training.world_count == world_count
-    assert config.action.input_mode == input_mode
-    assert config.action.normalized_mapping == mapping
-    assert config.logging.run_name == experiment
-
-
-def test_sharpa_flash_sac_uses_validated_final_mixed_reset_curriculum():
-    config = compose_config("train_flash_sac", ["experiment=sharpa_flash_sac", _PARQUET])
-    training = instantiate_typed(config.training, FlashSACTrainingConfig)
-    curriculum = training.curriculum
-
+def test_default_is_the_complete_h2r_recipe():
+    config = compose_config("train_flash_sac", [_BINDING])
+    explicit = compose_config("train_flash_sac", ["experiment=h2r_sharpa_flash_sac", _BINDING])
+    assert resolved_dict(config) == resolved_dict(explicit)
+    training = instantiate_typed(config.training, TrainingConfig)
+    assert training.world_count == 4096
     assert training.total_environment_steps == 250_003_456
-    assert curriculum.thresholds[-2:] == (200_007_680, 250_003_456)
-    assert curriculum.stage_at(200_007_679).reset_to_first_frame_probability is None
-    assert curriculum.stage_at(200_007_680).reset_to_first_frame_probability == 0.5
-    assert curriculum.stage_at(250_003_455).reset_to_first_frame_probability == 0.5
-
-
-def test_h2r_final_stage_trains_immediate_unassisted_deployment():
-    config = compose_config("train_flash_sac", ["experiment=h2r_sharpa_flash_sac", _PARQUET])
-    training = instantiate_typed(config.training, FlashSACTrainingConfig)
-    native = instantiate_typed(
-        compose_config("train_flash_sac", ["experiment=sharpa_flash_sac", _PARQUET]).training,
-        FlashSACTrainingConfig,
-    )
-    assert training.curriculum.thresholds == native.curriculum.thresholds
-    assert training.curriculum.stages[:-1] == native.curriculum.stages[:-1]
+    assert training.updates_per_collection == 8
+    assert training.network.actor_hidden_dim == 256
+    assert training.network.critic_hidden_dim == 512
+    assert training.replay.capacity == 4_194_304
+    assert config.embodiment._target_ == "flash_chord.h2r.robot.H2rSharpaHands"
+    assert config.env.action._target_ == "flash_chord.h2r.action.H2rActionConfig"
+    assert config.task.motion_speed == 1
+    assert (config.env.sim.fps, config.env.sim.substeps) == (30, 4)
+    assert config.scene.support and not config.scene.decompose_objects
+    assert config.action.input_mode == "normalized"
+    assert config.action.normalized_mapping == "rational"
+    assert training.curriculum.thresholds[-2:] == (200_007_680, 250_003_456)
     final = training.curriculum.stage_at(200_007_680)
-    assert final.voc_scale == 0.0
-    assert final.immediate_first_frame_probability == 1.0
-    assert final.objective_weights == native.curriculum.stages[-1].objective_weights
+    assert final.voc_scale == 0
+    assert final.immediate_first_frame_probability == 1
 
 
-def test_dexmate_recipe_retains_derived_controller_without_a_versioned_public_config():
-    config = compose_config("train_flash_sac", ["experiment=dexmate_sharpa_flash_sac", _PARQUET])
-    training = instantiate_typed(config.training, FlashSACTrainingConfig)
-
-    assert config.embodiment.config.asset_id == "vega_sharpa_v2"
-    assert config.embodiment.config.urdf_path._args_[0].endswith("v2/vega_sharpa_58dof.urdf")
-    assert config.task.motion_speed == 0.5
-    assert config.action.delay.min_steps == config.action.delay.max_steps == 2
-    assert config.action.arm_scale == 0.075
-    assert config.action.finger_scale == 0.15
-    assert config.action.final_target.mode == "ema"
-    assert config.action.final_target.arm_ema == config.action.final_target.finger_ema == 0.75
-    assert config.objective.action_rate_l2.weight == -0.05
-    assert config.objective.contact_wrench_support.weight == 20.0
-    assert config.objective.contact_force_l2.mode == "per_hand_log"
-    assert config.collision.robot_support_collision is True
-    assert config.env.arm_position_integral.gain_s_inv2 == 0.02
-    assert config.env.arm_position_integral.max_effort_fraction == 0.15
-    assert training.replay.capacity == 10_000_000
-    assert training.replay.observation_storage_dtype == "float16"
-    assert training.curriculum.thresholds[-2:] == (200_007_680, 250_009_600)
-    assert training.curriculum.stage_at(200_007_680).reset_to_first_frame_probability == 0.5
+@pytest.mark.parametrize("experiment", [
+    "sharpa_flash_sac", "sharpa_ppo", "dexmate_sharpa_flash_sac",
+    "g1_recon_body_ppo", "g1_recon_body_flash_sac",
+])
+def test_native_training_recipes_are_not_available(experiment):
+    with pytest.raises(MissingConfigException):
+        compose_config("train_flash_sac", [f"experiment={experiment}", _BINDING])
 
 
-def test_object_scale_randomization_remains_publicly_configurable():
-    config = compose_config(
-        "train_flash_sac",
-        [
-            "experiment=sharpa_flash_sac",
-            _PARQUET,
-            "scene.object_scale_min=0.8",
-            "scene.object_scale_max=1.2",
-            "scene.object_scale_seed=7",
-        ],
-    )
-
-    assert (config.scene.object_scale_min, config.scene.object_scale_max, config.scene.object_scale_seed) == (
-        0.8,
-        1.2,
-        7,
-    )
+@pytest.mark.parametrize("override", [
+    "task.parquet=/tmp/reference.parquet",
+    "action._target_=flash_chord.runtime.actions.ActionConfig",
+    "task.motion_speed=0.5", "task.motion_start_frame=1",
+    "task.motion_end_frame=10", "task.source_frame_playback=true",
+    "sim.fps=20", "sim.substeps=5",
+    "scene.support=false", "scene.decompose_objects=true", "scene.object_scale_min=0.8",
+    "embodiment.binding_path=/other/h2r_binding.json",
+    "~experiment",
+])
+def test_native_or_task_changing_overrides_fail_before_reading_assets(override):
+    config = compose_config("train_flash_sac", [_BINDING, override])
+    with pytest.raises(ValueError, match="H2R"):
+        require_h2r_input(config)
 
 
-def test_force_closure_reward_configs_remain_available():
-    sharpa = compose_config("train_flash_sac", ["experiment=sharpa_flash_sac", _PARQUET])
-    g1 = compose_config("train", ["experiment=g1_recon_body_ppo", _PARQUET])
-
-    assert sharpa.objective.force_closure._target_.endswith("ForceClosureObjectiveTermConfig")
-    assert g1.objective.force_closure_weight == 5.0
-    assert g1.objective.force_closure_min_support == 0.01
-
-
-def test_task_parquet_is_required_in_the_release_config():
-    config = compose_config("train_flash_sac", ["experiment=sharpa_flash_sac"])
+def test_input_is_required_and_not_replaced_with_a_default_sequence():
+    config = compose_config("train_flash_sac")
     with pytest.raises(MissingMandatoryValue):
-        _ = config.task.parquet
+        require_h2r_input(config)
 
 
-def test_partitioned_parquet_path_composes_when_value_is_quoted():
-    parquet = "/data/sequence_id=clip/robot_name=g1/data.parquet"
-    config = compose_config("train", ["experiment=g1_recon_body_ppo", f"task.parquet='{parquet}'"])
-
-    assert config.task.parquet == parquet
-
-
-def test_viewer_config_supports_only_release_backends():
-    for backend in ("gl", "mp4", "viser", "null", "none"):
-        output = "policy.mp4" if backend == "mp4" else "output.mp4"
-        assert ViewerConfig(backend=backend, output_path=output).backend == backend
+def test_partitioned_binding_path_composes_when_quoted():
+    path = "/data/sequence_id=clip/h2r_binding.json"
+    config = compose_config("train_flash_sac", [f"task.parquet='{path}'"])
+    assert config.task.parquet == path
 
 
-def test_policy_viewer_uses_algorithm_neutral_checkpoint_config():
+def test_policy_viewer_defaults_to_h2r_and_explicit_reset():
     config = compose_config("view_policy", ["evaluation.checkpoint=/tmp/policy.safetensors"])
     evaluation = instantiate_typed(config.evaluation, PolicyViewConfig)
-
     assert evaluation.checkpoint == "/tmp/policy.safetensors"
     assert evaluation.deterministic is True
     assert evaluation.reset_mode == "explicit"
+    assert config.embodiment._target_ == "flash_chord.h2r.robot.H2rSharpaHands"
+    assert config.scene.world_count == 1
+
+
+def test_viewer_backends():
+    for backend in ("gl", "mp4", "viser", "null", "none"):
+        assert ViewerConfig(backend=backend, output_path="policy.mp4").backend == backend
 
 
 def test_resolve_path_uses_invocation_directory(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     assert resolve_path("checkpoint.ckpt") == Path(tmp_path, "checkpoint.ckpt")
+
+
+@pytest.mark.parametrize("embodiment", ["sharpa_hands", "sharpa_hands_stiff", "sharpa_hands_primitive", "dexmate_sharpa", "g1_dex3"])
+def test_native_robot_configs_are_not_available(embodiment):
+    with pytest.raises(MissingConfigException):
+        compose_config("train_flash_sac", [f"embodiment={embodiment}", _BINDING])
+
+
+@pytest.mark.parametrize("runtime", ["env", "replay"])
+def test_replay_uses_the_common_robot_clock_and_action(runtime):
+    cfg = compose_config("replay", [_BINDING])
+    assert cfg.replay.action._target_ == "flash_chord.h2r.action.H2rActionConfig"
+    assert (cfg.replay.sim.fps, cfg.replay.sim.substeps) == (30, 4)
+    assert cfg.scene.world_count == 1
+    assert cfg.replay.voc_scale == 0
+    cfg[runtime].action = {"_target_": "flash_chord.runtime.actions.ActionConfig"}
+    with pytest.raises(ValueError, match="H2R"):
+        require_h2r_input(cfg)

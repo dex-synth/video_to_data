@@ -242,7 +242,6 @@ dependencies = [
     { name = "newton" },
     { name = "numpy" },
     { name = "omegaconf" },
-    { name = "onnxruntime-gpu" },
     { name = "pillow" },
     { name = "pyarrow" },
     { name = "pyglet" },
@@ -281,7 +280,6 @@ requires-dist = [
     { name = "newton", specifier = "==1.5.0" },
     { name = "numpy", specifier = "==2.4.6" },
     { name = "omegaconf", specifier = "==2.3.1" },
-    { name = "onnxruntime-gpu", specifier = "==1.28.0" },
     { name = "optax", marker = "extra == 'train'", specifier = "==0.2.8" },
     { name = "pillow", specifier = "==12.2.0" },
     { name = "pyarrow", specifier = "==24.0.0" },
@@ -297,14 +295,6 @@ requires-dist = [
     { name = "warp-lang", specifier = "==1.16.0" },
 ]
 provides-extras = ["dev", "train"]
-
-[[package]]
-name = "flatbuffers"
-version = "25.12.19"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl", hash = "sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4", size = 26661, upload-time = "2025-12-19T23:16:13.622Z" },
-]
 
 [[package]]
 name = "flax"
@@ -939,23 +929,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ce/3d/e4b57b8d9008c6ebe0d5eff901f91d5700cf7bdb8c8863df817463a7fd5e/omegaconf-2.3.1.tar.gz", hash = "sha256:e5e7de64aeebeddaf8e6d3f7a783b32ac2a01c0fbd9c878012caecb891a1f42a", size = 3298472, upload-time = "2026-06-11T05:05:12.885Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/0e/152509871bf30df6fc38569f52a2db9b55dd41aae957adae50a053ac7778/omegaconf-2.3.1-py3-none-any.whl", hash = "sha256:3d701d14e9a8828f1edd28bb70b725908b34277cdd72cf7d6a83f94dadc6b6a0", size = 79502, upload-time = "2026-06-11T05:05:09.954Z" },
-]
-
-[[package]]
-name = "onnxruntime-gpu"
-version = "1.28.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "flatbuffers" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "protobuf" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7b/51/fe4fbdb7a11beaebdad752973efd8dad3600f50d56e681fa861f65d6cb17/onnxruntime_gpu-1.28.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:774d4c307317f7a0fefc33930820b7ac2a62be2c595e6a1e63e318555f7176b8", size = 249753828, upload-time = "2026-07-25T01:25:25.614Z" },
-    { url = "https://files.pythonhosted.org/packages/d1/1b/a634783c2455cca7c66261dc4e3e16f4058047b79679925737a30dd4c76e/onnxruntime_gpu-1.28.0-cp311-cp311-win_amd64.whl", hash = "sha256:d5004c1d38da77970d4534e2e20e34ade9c4fb167bfc685a9843d2863a58122a", size = 241446409, upload-time = "2026-07-25T01:24:55.933Z" },
-    { url = "https://files.pythonhosted.org/packages/f2/18/e4e906d564af3dd84c2816118ce8e0c087d351ef69a819727b940fb01b6b/onnxruntime_gpu-1.28.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3b3a63cecd239d72432cd44569d047de8f4d69e471cd5f60f7ac7fc8769be5ec", size = 249767362, upload-time = "2026-07-29T16:31:09.077Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/9e/92554acd080db68f549fd0e653fcf51a9dea7cb31e70c497714a9f2310fc/onnxruntime_gpu-1.28.0-cp312-cp312-win_amd64.whl", hash = "sha256:3befb47dabd2843bb606a50abd6f14b1eb1324eb235d5e5f3b01dd8b8034af1f", size = 241459431, upload-time = "2026-07-25T01:25:05.77Z" },
 ]
 
 [[package]]

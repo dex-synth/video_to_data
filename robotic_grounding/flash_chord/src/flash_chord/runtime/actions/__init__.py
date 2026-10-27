@@ -20,7 +20,6 @@ from .joint_position import (
     ResidualJointPositionAction,
     ResidualJointPositionActionConfig,
 )
-from .sonic import SonicJointResidualAction, SonicJointResidualActionConfig
 
 __all__ = [
     "Action",
@@ -36,6 +35,4 @@ __all__ = [
     "ResidualHandPoseAction",
     "ResidualJointPositionAction",
     "ResidualJointPositionActionConfig",
-    "SonicJointResidualAction",
-    "SonicJointResidualActionConfig",
 ]

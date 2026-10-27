@@ -1,16 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Replay a task parquet with a configured embodiment and zero-residual action.
+"""Replay a sealed H2R task using the training action with zero residual.
 
-Two modes:
-    physical (default): contact on, soft gains -- shows the real grasp contact
-    kinematic: contact off, stiff gains -- clean kinematic-fidelity replay
+    python scripts/debug/replay.py "task.parquet=/path/to/prepared/h2r_binding.json"
 
-    python scripts/debug/replay.py "task.parquet='<.../robot_name=sharpa_wave>'"
-    python scripts/debug/replay.py replay=kinematic action=residual_hand_pose_stiff \
-      collision=kinematic embodiment=sharpa_hands_stiff
-    python scripts/debug/replay.py --config-name=sonic_replay "task.parquet='<.../robot_name=g1>'"
+The Viser start_paused controls also provide a kinematic reference preview.
+Physical replay is a method diagnostic, not a benchmark evaluation.
 """
 
 from __future__ import annotations
@@ -20,6 +16,7 @@ from omegaconf import DictConfig
 
 from flash_chord.configuration import instantiate_typed
 from flash_chord.embodiments.base import Embodiment
+from flash_chord.h2r.configuration import require_h2r_input
 from flash_chord.runtime.replay import ReplayConfig, ReplayRunner
 from flash_chord.scene.collision import CollisionPolicy
 from flash_chord.scene.setup import setup_scene
@@ -31,6 +28,7 @@ class Replay(ViewerApp):
     def __init__(self, viewer, args):
         super().__init__(viewer, args)
         cfg = args.config
+        require_h2r_input(cfg)
         embodiment = instantiate_typed(cfg.embodiment, Embodiment)
         collision = instantiate_typed(cfg.collision, CollisionPolicy)
         replay_cfg = instantiate_typed(cfg.replay, ReplayConfig)
@@ -79,10 +77,6 @@ class Replay(ViewerApp):
             print("Replay kernels are ready; playback remains paused at frame 0.", flush=True)
             self._install_playback_controls()
         action_details = f", action={type(self.runner.action).__name__}, action_dim={self.runner.action.action_dim}"
-        encoder = getattr(self.runner.action, "encoder_session", None)
-        decoder = getattr(self.runner.action, "decoder_session", None)
-        if encoder is not None and decoder is not None:
-            action_details += f", encoder={encoder.provider}, decoder={decoder.provider}"
         print(
             f"replay: {self.num_frames} frames, "
             f"robot_collision={collision.robot_scope}, "
@@ -193,6 +187,7 @@ class Replay(ViewerApp):
 @hydra.main(version_base="1.3", config_path="../../src/flash_chord/configs", config_name="replay")
 def main(cfg: DictConfig) -> None:
     """Launch a replay using one composed config and no experiment-specific argparse layer."""
+    require_h2r_input(cfg)
     viewer = instantiate_typed(cfg.viewer, ViewerConfig)
     Replay.launch_configured(cfg, viewer, device=cfg.device)
 

@@ -3,18 +3,18 @@ defaults:
   - sim: rl
   - scene: train
   - collision: training
-  - embodiment: sharpa_hands
+  - embodiment: h2r_sharpa_hands
   - action: residual_hand_pose
   - observation: policy
   - objective: tracking
   - termination: tracking
   - reset: reference
   - env: rl
-  - curriculum: tracking_250m_mixed_reset
+  - curriculum: h2r_tracking_250m
   - logging: wandb
   - training: reference_flash_sac
   - _self_
-  - experiment: sharpa_flash_sac
+  - experiment: h2r_sharpa_flash_sac
 
 scene:
   world_count: 1024

@@ -18,10 +18,13 @@ from omegaconf import DictConfig
 from flash_chord.configuration import instantiate_typed, resolve_path, resolved_dict
 from flash_chord.embodiments.base import Embodiment
 from flash_chord.envs.rl import RLEnv, RLEnvConfig
+from flash_chord.h2r.configuration import require_h2r_input
 from flash_chord.scene.collision import CollisionPolicy
 from flash_chord.scene.setup import setup_scene
+from flash_chord.training.checkpoint import read_checkpoint_metadata
 from flash_chord.training.checkpoint_metadata import (
     build_checkpoint_metadata,
+    checkpoint_config,
     critic_schema,
     policy_schema,
     resolved_reference_config,
@@ -39,6 +42,10 @@ time.tzset()
 @hydra.main(version_base="1.3", config_path="../src/flash_chord/configs", config_name="train_flash_sac")
 def main(cfg: DictConfig) -> None:
     """Compose one FlashSAC experiment and run its compiled Warp/JAX training loop."""
+    binding = require_h2r_input(cfg)
+    if cfg.training.checkpoint_path is not None:
+        saved = checkpoint_config(read_checkpoint_metadata(resolve_path(cfg.training.checkpoint_path)))
+        require_h2r_input(saved, expected_binding=binding)
     env_config = instantiate_typed(cfg.env, RLEnvConfig)
     embodiment = instantiate_typed(cfg.embodiment, Embodiment)
     collision = instantiate_typed(cfg.collision, CollisionPolicy)

@@ -4,5 +4,3 @@
 from pathlib import Path
 
 ASSETS_DIR = Path(__file__).parent
-URDF_DIR = ASSETS_DIR / "urdfs"
-SHARPAWAVE_URDF_DIR = URDF_DIR / "sharpawave"

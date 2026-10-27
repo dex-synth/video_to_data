@@ -60,7 +60,7 @@ Examples:
   docker/run.sh build user_xyz       # build flash_chord:user_xyz
   docker/run.sh start latest 0        # start container + open shell
   docker/run.sh shell                 # open another shell (latest, gpu 0)
-  docker/run.sh exec latest 0 -- python scripts/debug/view_scene.py --parquet /data/reference.parquet --viewer gl
+  docker/run.sh exec latest 0 -- python scripts/debug/view_scene.py --binding /data/prepared/h2r_binding.json --viewer gl
   docker/run.sh exec -- pytest tests/test_configuration.py -q
   docker/run.sh stop latest 0
 USAGE

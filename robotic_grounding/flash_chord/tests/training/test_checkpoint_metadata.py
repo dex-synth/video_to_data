@@ -230,8 +230,8 @@ def test_checkpoint_evaluation_config_uses_saved_training_state_and_explicit_ove
 
     saved = resolved_dict(
         compose_config(
-            "train",
-            ["experiment=sharpa_ppo", "task.parquet=/saved/reference.parquet", "scene.world_count=4096"],
+            "train_flash_sac",
+            ["task.parquet=/saved/h2r_binding.json", "scene.world_count=4096"],
         )
     )
     current = compose_config(

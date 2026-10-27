@@ -10,7 +10,7 @@ import pytest
 
 from flash_chord.assets import ASSETS_DIR
 
-pytestmark = [pytest.mark.gpu, pytest.mark.sequence_data]
+pytestmark = pytest.mark.gpu
 
 _HOT3D = (
     ASSETS_DIR
@@ -42,6 +42,7 @@ def _with_object_assets(reference, assets):
     )
 
 
+@pytest.mark.sequence_data
 def test_hot3d_multi_object_spawn_at_reference_pose():
     import warp as wp
 
@@ -71,6 +72,7 @@ def test_hot3d_multi_object_spawn_at_reference_pose():
     assert bindings[0].shapes.stop <= bindings[1].shapes.start
 
 
+@pytest.mark.sequence_data
 def test_arctic_articulated_object_spawn_at_reference_pose():
     import warp as wp
 
@@ -129,6 +131,7 @@ def test_arctic_articulated_object_spawn_at_reference_pose():
         assert orientation_error < 1.0e-3
 
 
+@pytest.mark.sequence_data
 def test_object_import_does_not_collapse_or_remap_existing_builder_prefix():
     import warp as wp
 
@@ -160,33 +163,27 @@ def test_object_import_does_not_collapse_or_remap_existing_builder_prefix():
     assert [binding.root.free_q_ids[0] for binding in bindings] == [q_offset, q_offset + 7]
 
 
-def test_two_object_imports_preserve_vega_palm_mounts_and_layout():
+def test_object_import_preserves_common_robot_bodies_and_layout(h2r_binding):
     import warp as wp
+    from flash_chord.h2r.builder import CommonModelBuilder
+    from flash_chord.h2r.robot import H2rSharpaHands
 
-    import newton
-    from flash_chord.data.mano_sharpa import load_mano_sharpa
-    from flash_chord.embodiments.vega_sharpa import VegaSharpa
-    from flash_chord.scene.objects import spawn_objects
-
-    ref = load_mano_sharpa(str(_HOT3D))
     with wp.ScopedDevice("cuda:0"):
-        builder = newton.ModelBuilder()
-        layout = VegaSharpa().build(builder)
+        builder = CommonModelBuilder(gravity=-9.81)
+        layout = H2rSharpaHands(h2r_binding).build(builder)
         body_prefix = tuple(builder.body_label)
         joint_prefix = tuple(builder.joint_label)
+        builder.add_mjcf(str(h2r_binding.parent / "assets/object.xml"), collapse_fixed_joints=False)
 
-        bindings = spawn_objects(builder, ref, decompose_collision=False)
-
-    assert len(body_prefix) == 60
-    assert tuple(builder.body_label[: len(body_prefix)]) == body_prefix
-    assert tuple(builder.joint_label[: len(joint_prefix)]) == joint_prefix
+    assert tuple(builder.body_label[:len(body_prefix)]) == body_prefix
+    assert tuple(builder.joint_label[:len(joint_prefix)]) == joint_prefix
     for side in ("left", "right"):
         palm = layout.hand(side).palm_frame
-        assert palm is not None
         assert builder.body_label[palm.body_id].endswith(f"/{side}_hand_C_MC")
-    assert [binding.root.body_id for binding in bindings] == [60, 61]
+    assert builder.body_count == len(body_prefix) + 2
 
 
+@pytest.mark.sequence_data
 def test_object_import_rejects_incomplete_reference_body_ownership_before_mutating_builder():
     import newton
     from flash_chord.data.mano_sharpa import load_mano_sharpa
@@ -203,6 +200,7 @@ def test_object_import_rejects_incomplete_reference_body_ownership_before_mutati
     assert builder.shape_count == 0
 
 
+@pytest.mark.sequence_data
 def test_object_import_rejects_missing_component_body_name():
     import newton
     from flash_chord.data.mano_sharpa import load_mano_sharpa
@@ -219,6 +217,7 @@ def test_object_import_rejects_missing_component_body_name():
         spawn_objects(newton.ModelBuilder(), invalid, decompose_collision=False)
 
 
+@pytest.mark.sequence_data
 def test_object_import_rejects_declared_root_without_free_joint():
     import newton
     from flash_chord.data.mano_sharpa import load_mano_sharpa

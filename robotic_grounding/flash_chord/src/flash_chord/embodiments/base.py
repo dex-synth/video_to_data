@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Embodiment interface + per-world layout (implemented by e.g. ``sharpa_hands``)."""
+"""Embodiment interface + per-world layout (implemented by ``h2r.robot.H2rSharpaHands``)."""
 
 from __future__ import annotations
 
