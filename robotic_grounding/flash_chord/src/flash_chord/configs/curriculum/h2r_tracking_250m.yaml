@@ -1,5 +1,6 @@
 _target_: flash_chord.configuration.make_fixed_curriculum
 
+# Optional deployment-exact reset ablation; not the default H2R curriculum.
 # Keep the Sharpa VOC schedule. The final approximately 50M transitions
 # train the exact H2R deployment reset: frame zero, full reference fingers,
 # no settling hold and no assistance (this stage has VOC=0).

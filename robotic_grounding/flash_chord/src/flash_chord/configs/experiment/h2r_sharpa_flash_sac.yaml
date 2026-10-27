@@ -11,7 +11,7 @@ defaults:
   - override /termination: tracking
   - override /reset: reference
   - override /env: rl
-  - override /curriculum: h2r_tracking_250m
+  - override /curriculum: tracking_250m_mixed_reset
   - override /training: reference_flash_sac
   - _self_
 
@@ -38,6 +38,8 @@ action:
   _target_: flash_chord.h2r.action.H2rActionConfig
   input_mode: normalized
   normalized_mapping: rational
+reset:
+  skip_first_frame_settling: true
 training:
   total_environment_steps: 250003456
   updates_per_collection: 8.0

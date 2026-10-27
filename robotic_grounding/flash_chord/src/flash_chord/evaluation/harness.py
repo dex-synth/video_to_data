@@ -235,6 +235,8 @@ def apply_evaluation_composition(
     config["env"]["reset"]["always_reset_to_first_frame"] = True
     if reset_mode == "explicit":
         config["env"]["reset"]["voc_decay_steps"] = 0
+    elif "skip_first_frame_settling" in config["env"]["reset"]:
+        config["env"]["reset"]["skip_first_frame_settling"] = False
     config["env"]["reset"]["seed"] = 42
     # The resolved config inlines termination under `env` as well as at the top level.
     for termination in _termination_blocks(config):

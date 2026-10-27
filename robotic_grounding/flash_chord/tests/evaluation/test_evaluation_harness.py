@@ -139,12 +139,14 @@ def test_sampled_settled_composition_preserves_reset_assistance_only_for_preambl
     config = _config(_recon_body_termination())
     config["env"]["voc"] = {"max_force": 150.0, "max_torque": 10.0}
     config["env"]["reset"]["voc_decay_steps"] = 10
+    config["env"]["reset"]["skip_first_frame_settling"] = True
 
     apply_evaluation_composition(config, world_count=8, reset_mode="sampled_settled")
 
     assert config["env"]["voc_scale"] == 0.0
     assert config["env"]["voc"] == {"max_force": 150.0, "max_torque": 10.0}
     assert config["env"]["reset"]["voc_decay_steps"] == 10
+    assert config["env"]["reset"]["skip_first_frame_settling"] is False
     assert config["env"]["reset"]["always_reset_to_first_frame"] is True
 
 

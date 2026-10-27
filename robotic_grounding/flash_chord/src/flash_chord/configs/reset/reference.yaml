@@ -3,6 +3,7 @@ reset_finger_openness: 0.7
 always_reset_to_first_frame: false
 reset_to_first_frame_probability: 0.1
 immediate_first_frame_probability: 0.0
+skip_first_frame_settling: false
 first_frame_voc_threshold: 0.1
 voc_decay_steps: 20
 voc_decay_mode: step

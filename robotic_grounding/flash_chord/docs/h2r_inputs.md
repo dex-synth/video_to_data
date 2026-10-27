@@ -2,7 +2,7 @@
 
 `flash_chord.h2r` 消费 h2r 的 human／scene bundle 与 `virtual_wrist_sharpa_wave_bimanual` robot bundle，在方法侧生成原生 MANO 特征、接触、Sharpa IK 和 FlashCHORD 参考。Bench 无需安装本方法的训练依赖。
 
-本 fork 只保留这条共同机器人上的训练配方，`scripts/train_flash_sac.py` 默认选择 `h2r_sharpa_flash_sac`；原生 Sharpa／Dexmate／G1 训练配方和 PPO 训练入口已移除。训练、续训、原生诊断评估与 policy viewer 均先校验 H2R 封存输入，拒绝普通 Parquet、原生 checkpoint 和改变共同输入的覆盖。配方参数保持原 H2R 设置。
+本 fork 只保留这条共同机器人上的训练配方，`scripts/train_flash_sac.py` 默认选择 `h2r_sharpa_flash_sac`；原生 Sharpa／Dexmate／G1 训练配方和 PPO 训练入口已移除。训练、续训、原生诊断评估与 policy viewer 均先校验 H2R 封存输入，拒绝普通 Parquet、原生 checkpoint 和改变共同输入的覆盖。默认沿用上游 `tracking_250m_mixed_reset` 课程，仅为采样到第 0 帧的训练 reset 跳过准备期；具体语义见下文。
 
 本目录不再打包原生 Sharpa、Vega/Dexmate、G1 的 URDF／网格或 SONIC policy，也不保留对应适配器和 G1 专用配置。共享的参考绑定、Sharpa 碰撞映射、动作处理和训练算法继续保留。准备阶段仍从相邻 V2D 的 Sharpa MJCF 读取 IK site 朝向，再把 site 放到共同机器人子树上，并使用共同 fingertip 位置；这项有效依赖不能作为旧资产删除。
 
@@ -63,15 +63,17 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
   viewer.backend=viser markers.enabled=false
 ```
 
-原生评估与 viewer 使用 checkpoint 中的配置重建方法环境，不代表 h2r 共同成绩。H2R 末阶段的部署初始化已通过续训验证；新增课程的完整从头训练尚未重新验证。更改当前 YAML 不会更改旧 checkpoint 中的配置。
+原生评估与 viewer 使用 checkpoint 中的配置重建方法环境，不代表 h2r 共同成绩。更改当前 YAML 不会更改旧 checkpoint 中的配置；初始化适配的训练效果须在具体任务上验证。
 
 ## 训练初始化与部署初始化
 
-`ReferenceReset` 默认在随机参考帧打开部分手指，并停留至 `voc_decay_steps` 结束。这段准备期仍可使用 VOC=1，即使课程的全局 VOC 已降为零。`reset_to_first_frame_probability` 只改变参考帧采样，不取消准备期，也不恢复完整参考手指姿态。共同评估的首帧显式 reset 则使用精确参考手指、零速度，立即开始运动，不执行这段准备。
+`ReferenceReset` 原生行为是在随机参考帧打开部分手指，并保持参考至 `voc_decay_steps` 结束；策略、物理仿真和奖励仍正常运行。默认 `voc_decay_steps=20`、`voc_decay_mode=step`，准备期使用 VOC=1，即使课程的全局 VOC 已降为零。`reset_to_first_frame_probability` 只改变参考帧采样，不恢复完整参考手指姿态。
 
-因此，训练最后阶段需要覆盖实际部署初始化。`reset.immediate_first_frame_probability` 控制采用精确首帧、完整手指姿态、无等待 reset 的比例；这些 reset 从第一步使用当前课程 VOC。默认值为 0，保留原生采样配方。也可在某一课程阶段设置同名 `immediate_first_frame_probability`，阶段未设置时使用 reset 配置值。H2R 专用课程 `h2r_tracking_250m` 保留原生 VOC 日程和奖励，在最后约 5000 万步将此比例设为 1，此时 VOC=0。旧 checkpoint 仍按自身保存的配置加载，不会自动采用新课程。
+H2R 配方启用 `reset.skip_first_frame_settling=true`：先按原生规则采样参考帧和手指，若最终选中第 0 帧，则跳过整个准备期，从第一步使用当前课程 VOC 并推进参考；其他帧仍保留原生准备过程。自然抽到第 0 帧、首帧概率覆盖和 `always_reset_to_first_frame` 都遵循同一规则。此开关不改变随机数采样、手指姿态、首帧概率、奖励或训练预算。准备期仍配置为 20 个控制步，在 H2R 30 Hz 下约为 0.67 秒。课程 VOC 尚未归零时，首帧仍有课程规定的辅助，不能将跳过准备期解释为所有阶段均无辅助。
 
-从已完成 VOC 课程的训练状态继续训练时，可设置 `reset.immediate_first_frame_probability=1.0`，并保留 VOC=0 的末阶段；恢复 `state_*.safetensors`，另存输出和完整配置。该设置不保证旧策略无需适应即可成功，也不会改写 checkpoint 中保存的旧配置。不能通过在共同评估端增加准备时间来替代这项训练覆盖。
+默认课程为上游 `tracking_250m_mixed_reset`：VOC 日程不变，最后约 5000 万步将 `reset_to_first_frame_probability` 提高到 0.5。`skip_first_frame_settling` 的通用默认值为 false，旧配置缺少此字段时保持原行为；当前 H2R 训练可显式设为 false 恢复上游 reset。共同评估仍使用第 0 帧、完整参考手指、零速度和无等待初始化，因此训练保留的随机手指与 eval 仍有差异；此改动不保证任务成功。原生诊断的 `sampled_settled` 模式显式关闭该开关，以保留它所请求的准备期。
+
+`reset.immediate_first_frame_probability` 是另一项可选消融，会直接选择第 0 帧、恢复完整参考手指并跳过准备期；默认值为 0，也可通过同名课程字段设置。`curriculum=h2r_tracking_250m` 保留旧的“末阶段全部使用精确首帧”消融，不再是默认课程。该消融与“采样到首帧才跳过等待”不能混为同一配方。旧 checkpoint 仍按自身保存的配置加载，不自动采用新设置；续训须另存输出和完整配置。
 
 训练误差比较的是一次物理推进后的状态与这次推进所保持的控制目标，且统计包含准备期、随机起点和失败后的新 episode。`evaluate_policy.py` 则包含初态，N 个参考采样只执行 N−1 次控制推进，按照各状态的真实参考时刻记录误差。两者均值不能直接当作同一个指标。比较训练与部署效果时，应另跑无辅助、无等待、无提前 reset 的完整轨迹，保留所有失败，并使用同一参考时间轴和计分规则。
 

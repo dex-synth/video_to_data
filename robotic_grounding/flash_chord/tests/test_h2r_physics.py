@@ -191,6 +191,29 @@ def test_immediate_training_reset_matches_deployment_state_and_clock(physics):
         np.testing.assert_array_equal(env.object_control_scale.numpy(), 0)
 
 
+def test_sampled_frame_zero_skips_preamble_in_physical_training_step(physics):
+    from dataclasses import replace
+
+    original, _, binding = physics
+    config = replace(original.config, reset=replace(
+        original.config.reset, always_reset_to_first_frame=True,
+        immediate_first_frame_probability=0.0, skip_first_frame_settling=True))
+    with wp.ScopedDevice("cuda:0"):
+        scene = build_h2r_scene(original.reference, H2rSharpaHands(binding), 1,
+                               CollisionPolicy(ground=False))
+        env = RLEnv(scene, original.reference, config)
+        env.reset()
+        np.testing.assert_array_equal(env.timestep.numpy(), 0)
+        np.testing.assert_array_equal(env.object_control_scale.numpy(), 0)
+        assert np.all(env.reset_policy.finger_scale.numpy() < 0.7)
+        env.capture_step()
+        env.reset()
+        env.step(wp.zeros(env.action.action_dim, dtype=wp.float32))
+        np.testing.assert_array_equal(env.timestep.numpy(), 1)
+        np.testing.assert_array_equal(env.object_control_scale.numpy(), 0)
+        assert np.isfinite(env.state_0.joint_q.numpy()).all()
+
+
 def test_rollout_errors_use_recorded_state_timestamp(physics):
     from types import SimpleNamespace
     from flash_chord.evaluation.rollout import record_object_pose_rollout

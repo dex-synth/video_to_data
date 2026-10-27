@@ -231,6 +231,8 @@ class ReferenceResetConfig:
     always_reset_to_first_frame: bool = False
     reset_to_first_frame_probability: float = 0.1
     immediate_first_frame_probability: float = 0.0
+    # Keep sampled finger poses and frame probabilities, skipping only frame-zero holds.
+    skip_first_frame_settling: bool = False
     first_frame_voc_threshold: float = 0.1
     voc_decay_steps: int = 20
     voc_decay_mode: Literal["step", "linear"] = "step"
@@ -346,6 +348,7 @@ def sample_reference_reset(
     reset_mask: wp.array(dtype=wp.int32),
     num_frames: int,
     voc_decay_steps: int,
+    skip_first_frame_settling: int,
     always_first_frame: int,
     first_frame_probability: wp.array(dtype=wp.float32),
     immediate_first_frame_probability: wp.array(dtype=wp.float32),
@@ -386,7 +389,9 @@ def sample_reference_reset(
     reset_frame[world] = frame
     finger_scale[world] = wp.randf(rng) * reset_finger_openness
     steps_since_reset[world] = 0
-    if voc_decay_steps == 0:
+    # Preserve frame/finger sampling; only frame-zero starts bypass the preamble.
+    if voc_decay_steps == 0 or (skip_first_frame_settling != 0 and frame == 0):
+        steps_since_reset[world] = voc_decay_steps
         applied_voc_scale[world] = curriculum_voc_scale[0]
     else:
         applied_voc_scale[world] = 1.0
@@ -563,6 +568,7 @@ class ReferenceReset:
                 reset_mask,
                 self.num_frames,
                 self.config.voc_decay_steps,
+                int(self.config.skip_first_frame_settling),
                 int(self.config.always_reset_to_first_frame),
                 self.first_frame_probability,
                 self.immediate_first_frame_probability,

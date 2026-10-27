@@ -38,7 +38,11 @@ def test_default_is_the_complete_h2r_recipe():
     assert training.curriculum.thresholds[-2:] == (200_007_680, 250_003_456)
     final = training.curriculum.stage_at(200_007_680)
     assert final.voc_scale == 0
-    assert final.immediate_first_frame_probability == 1
+    assert final.reset_to_first_frame_probability == 0.5
+    assert final.immediate_first_frame_probability is None
+    assert config.env.reset.skip_first_frame_settling is True
+    assert config.env.reset.immediate_first_frame_probability == 0
+    assert config.env.reset.voc_decay_steps == 20
 
 
 @pytest.mark.parametrize("experiment", [

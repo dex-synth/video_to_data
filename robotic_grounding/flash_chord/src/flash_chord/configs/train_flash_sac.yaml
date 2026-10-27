@@ -10,7 +10,7 @@ defaults:
   - termination: tracking
   - reset: reference
   - env: rl
-  - curriculum: h2r_tracking_250m
+  - curriculum: tracking_250m_mixed_reset
   - logging: wandb
   - training: reference_flash_sac
   - _self_

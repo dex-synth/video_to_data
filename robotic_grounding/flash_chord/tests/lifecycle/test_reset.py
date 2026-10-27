@@ -51,6 +51,83 @@ def test_zero_curriculum_still_has_legacy_reset_assistance_unless_immediate_is_s
         assert (policy.finger_scale.numpy() < 0.7).all()
 
 
+@pytest.mark.parametrize("voc_scale", [0.0, 0.25])
+@pytest.mark.parametrize("decay_mode", ["step", "linear"])
+def test_frame_zero_skip_preserves_sampling_and_other_frames_settling(voc_scale, decay_mode):
+    from dataclasses import replace
+
+    import warp as wp
+    from flash_chord.lifecycle.reset import ReferenceReset, ReferenceResetConfig
+
+    with wp.ScopedDevice("cuda:0"):
+        config = ReferenceResetConfig(
+            reset_to_first_frame_probability=0.0, voc_decay_steps=20, voc_decay_mode=decay_mode, seed=7
+        )
+        legacy = ReferenceReset.build(128, 11, config)
+        policy = ReferenceReset.build(128, 11, replace(config, skip_first_frame_settling=True))
+        mask = wp.ones(128, dtype=wp.int32)
+        scale = wp.array([voc_scale], dtype=wp.float32)
+        legacy.sample(mask, scale)
+        policy.sample(mask, scale)
+        frames = policy.reset_frame.numpy()
+        first = frames == 0
+        assert first.any() and (~first).any()
+        np.testing.assert_array_equal(frames, legacy.reset_frame.numpy())
+        np.testing.assert_array_equal(policy.finger_scale.numpy(), legacy.finger_scale.numpy())
+        np.testing.assert_array_equal(policy.reset_count.numpy(), legacy.reset_count.numpy())
+        assert np.all(policy.finger_scale.numpy() < 0.7)
+        np.testing.assert_array_equal(policy.steps_since_reset.numpy(), np.where(first, 20, 0))
+        np.testing.assert_allclose(policy.applied_voc_scale.numpy(), np.where(first, voc_scale, 1.0))
+
+        phase = wp.array(frames, dtype=wp.int32)
+        legacy_phase = wp.array(frames, dtype=wp.int32)
+        age = wp.zeros(128, dtype=wp.int32)
+        legacy_age = wp.zeros(128, dtype=wp.int32)
+        done = wp.zeros(128, dtype=wp.int32)
+        for step in range(1, 21):
+            policy.advance(done, done, phase, age, scale)
+            legacy.advance(done, done, legacy_phase, legacy_age, scale)
+            np.testing.assert_array_equal(phase.numpy()[first], step)
+            np.testing.assert_array_equal(phase.numpy()[~first], legacy_phase.numpy()[~first])
+            np.testing.assert_array_equal(
+                policy.applied_voc_scale.numpy()[~first], legacy.applied_voc_scale.numpy()[~first]
+            )
+            np.testing.assert_allclose(policy.applied_voc_scale.numpy()[first], voc_scale)
+        np.testing.assert_array_equal(phase.numpy()[~first], frames[~first] + 1)
+        np.testing.assert_array_equal(age.numpy(), 20)
+
+
+@pytest.mark.parametrize("always_first", [False, True])
+def test_forced_frame_zero_skip_is_masked_and_graph_capturable(always_first):
+    import warp as wp
+    from flash_chord.lifecycle.reset import ReferenceReset, ReferenceResetConfig
+
+    with wp.ScopedDevice("cuda:0"):
+        policy = ReferenceReset.build(2, 195, ReferenceResetConfig(
+            always_reset_to_first_frame=always_first,
+            reset_to_first_frame_probability=1.0,
+            skip_first_frame_settling=True,
+        ))
+        mask = wp.array([1, 0], dtype=wp.int32)
+        scale = wp.array([0.0], dtype=wp.float32)
+        policy.reset_frame.assign([17, 23])
+        policy.finger_scale.assign([0.2, 0.3])
+        policy.steps_since_reset.assign([5, 6])
+        policy.applied_voc_scale.assign([1.0, 0.5])
+        with wp.ScopedCapture() as capture:
+            policy.sample(mask, scale)
+        wp.capture_launch(capture.graph)
+        np.testing.assert_array_equal(policy.reset_frame.numpy(), [0, 23])
+        np.testing.assert_array_equal(policy.steps_since_reset.numpy(), [20, 6])
+        np.testing.assert_array_equal(policy.applied_voc_scale.numpy(), [0.0, 0.5])
+        assert policy.finger_scale.numpy()[0] < 0.7
+        assert policy.finger_scale.numpy()[1] == np.float32(0.3)
+        np.testing.assert_array_equal(policy.reset_count.numpy(), [1, 0])
+        # Explicit evaluation still requests full reference fingers and no settling.
+        policy.prepare_explicit(mask, scale)
+        np.testing.assert_array_equal(policy.finger_scale.numpy(), np.array([1.0, 0.3], np.float32))
+
+
 def test_reset_places_wrists_and_objects_at_reference(h2r_setup):
     import warp as wp
 
