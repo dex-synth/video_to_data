@@ -10,6 +10,7 @@ src/flash_chord/
 ├── embodiments/     # Robot import, semantic layouts, and reference binding
 ├── envs/            # Warp environments and policy observations
 ├── evaluation/      # Rollout harness and CHORD/ADD-AUC/SPIDER/ManipTrans metrics
+├── h2r/             # Common Sharpa inputs, physics checks, and deployment controller
 ├── lifecycle/       # Curriculum, reset, and termination logic
 ├── objectives/      # Tracking, wrench, force-closure, and ReconBody rewards
 ├── runtime/         # Actions, delay, control, contacts, and replay
@@ -28,6 +29,12 @@ Top-level entry points are in `scripts/`:
 
 `workflow/` contains remote training and evaluation templates. `tests/` separates pure/unit coverage from optional
 CUDA and local-sequence integration coverage.
+
+The H2R adapter has three module entry points: `h2r.prepare` builds the immutable method reference,
+`h2r.evaluation` serves the native controller over the benchmark socket, and `h2r.cpu_evaluation` independently
+checks that controller on the common MuJoCo CPU task. Training and visualization use the existing scripts above.
+The CPU check does not replace benchmark-owned evaluation. Commands and regression inputs are documented in
+[the H2R workflow](h2r_inputs.md); generated inputs, checkpoints, and diagnostic runs belong outside the source tree.
 
 `scene/support.py` attaches support surfaces to the world with a fixed joint; support bindings own bodies and shapes,
 not dynamic coordinates. `runtime/sim.py` enables MuJoCo MultiCCD. The H2R adapter additionally validates the active

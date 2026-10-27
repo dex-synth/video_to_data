@@ -1,7 +1,6 @@
 """Run the native FlashCHORD controller against an h2r_bench Unix socket."""
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -11,6 +10,7 @@ import struct
 import time
 
 from .controller import Controller
+from .inputs import digest, write_json
 
 MAX_MESSAGE_BYTES = 32 * 1024 * 1024
 
@@ -72,14 +72,12 @@ def main():
         if hello.get("type") != "hello":
             raise ValueError("Expected hello")
         controller = Controller(args.checkpoint, args.prepared, hello, device=args.device)
-        with args.checkpoint.open("rb") as checkpoint:
-            digest = hashlib.file_digest(checkpoint, "sha256").hexdigest()
-        manifest = {"checkpoint": str(args.checkpoint.resolve()), "checkpoint_sha256": digest,
+        manifest = {"checkpoint": str(args.checkpoint.resolve()), "checkpoint_sha256": digest(args.checkpoint),
                     "prepared": str(args.prepared.resolve()), "task_id": hello["task_id"],
                     "deterministic": True, "device": args.device,
                     "policy_batch_size": 1, "xla_flags": os.environ["XLA_FLAGS"], "hello": hello,
                     "checkpoint_config": controller.saved_config}
-        (args.output / "controller.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        write_json(args.output / "controller.json", manifest)
         send(stream, controller.start())
         with (args.output / "controls.jsonl").open("x") as log:
             while True:
@@ -87,7 +85,7 @@ def main():
                 if message.get("type") != "frames":
                     raise ValueError("Expected frames")
                 if message["done"]:
-                    (args.output / "result.json").write_text(json.dumps(message, indent=2) + "\n")
+                    write_json(args.output / "result.json", message)
                     break
                 begin = time.monotonic()
                 command, diagnostics = controller.step(message["episodes"])

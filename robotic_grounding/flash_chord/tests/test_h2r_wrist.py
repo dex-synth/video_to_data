@@ -72,7 +72,6 @@ def test_warp_wrist_target_matches_processed_world_pose(device):
                 wp.array([0, 1, 2], dtype=wp.int32),
                 wp.array([3, 4, 5], dtype=wp.int32),
                 wp.array([base], dtype=wp.vec3),
-                1,
                 7,
                 6,
                 6,

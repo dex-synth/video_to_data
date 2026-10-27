@@ -130,7 +130,6 @@ class Controller:
         required = set(self.observed_bodies.values())
         if len(set(self.body_names)) != len(self.body_names) or not required <= set(obs["bodies"]):
             raise ValueError(f"Evaluation is missing model bodies: {required - set(obs['bodies'])}")
-        self.body_ids = {name: i for i, name in enumerate(self.body_names)}
         self.body_com = self.model.body_com.numpy()[:self.bodies_per_world]
         self.shape_by_body = {}
         shape_bodies = self.model.shape_body.numpy()[:self.contact.shapes_per_world]

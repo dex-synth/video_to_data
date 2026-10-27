@@ -29,7 +29,7 @@ class H2rSharpaHands:
     def __init__(self, binding_path):
         self.binding_path = Path(binding_path).resolve()
         load_binding(self.binding_path)
-        _, self.semantics, self.compiled = robot_bundle(self.binding_path.parent / "robot")
+        _, self.semantics, _ = robot_bundle(self.binding_path.parent / "robot")
 
     def build(self, builder):
         newton.solvers.SolverMuJoCo.register_custom_attributes(builder)

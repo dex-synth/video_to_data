@@ -56,42 +56,36 @@ class SimConfig:
 
 def build_solver(model, cfg: SimConfig):
     """Construct the MuJoCo-Warp solver (Newton ``SolverMuJoCo``) for ``model`` from ``cfg``."""
+    options = {
+        "solver": cfg.solver,
+        "integrator": cfg.integrator,
+        "cone": cfg.cone,
+        "impratio": cfg.impratio,
+        "iterations": cfg.iterations,
+        "ls_iterations": cfg.ls_iterations,
+    }
     settings = getattr(model, "h2r_settings", None)
+    if settings is not None:
+        if abs(cfg.sim_dt - settings["timestep_s"]) > 1e-12 or cfg.fps != 30 or not cfg.use_mujoco_contacts:
+            raise ValueError("H2R requires 30 Hz control, its exact physical timestep and MuJoCo contacts")
+        # The common task owns physics settings; the method owns buffer capacity.
+        options.update({name: settings[name] for name in (*options, "tolerance")})
+        for name in ("solver", "integrator", "cone"):
+            options[name] = options[name].lower()
+    solver = newton.solvers.SolverMuJoCo(
+        model,
+        njmax=cfg.njmax,
+        nconmax=cfg.nconmax,
+        use_mujoco_contacts=cfg.use_mujoco_contacts,
+        enable_multiccd=True,
+        **options,
+    )
     if settings is not None:
         from flash_chord.h2r.validation import restore_joint_force_limits, validate_solver
 
-        if abs(cfg.sim_dt - settings["timestep_s"]) > 1e-12 or cfg.fps != 30 or not cfg.use_mujoco_contacts:
-            raise ValueError("H2R requires 30 Hz control, its exact physical timestep and MuJoCo contacts")
-        solver = newton.solvers.SolverMuJoCo(
-            model,
-            njmax=cfg.njmax,
-            nconmax=cfg.nconmax,
-            solver=settings["solver"].lower(),
-            integrator=settings["integrator"].lower(),
-            cone=settings["cone"].lower(),
-            impratio=settings["impratio"],
-            iterations=settings["iterations"],
-            ls_iterations=settings["ls_iterations"],
-            tolerance=settings["tolerance"],
-            use_mujoco_contacts=True,
-            enable_multiccd=True,
-        )
         restore_joint_force_limits(solver, model.h2r_binding_path)
         validate_solver(solver, model.h2r_binding_path)
-        return solver
-    return newton.solvers.SolverMuJoCo(
-        model,
-        solver=cfg.solver,
-        integrator=cfg.integrator,
-        njmax=cfg.njmax,
-        nconmax=cfg.nconmax,
-        impratio=cfg.impratio,
-        cone=cfg.cone,
-        iterations=cfg.iterations,
-        ls_iterations=cfg.ls_iterations,
-        use_mujoco_contacts=cfg.use_mujoco_contacts,
-        enable_multiccd=True,
-    )
+    return solver
 
 
 def build_force_contacts(model, solver, cfg: SimConfig, device=None):

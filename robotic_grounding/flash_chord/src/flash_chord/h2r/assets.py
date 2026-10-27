@@ -38,10 +38,10 @@ def prepare_assets(human_path, robot_path, output):
 
     output = Path(output)
     output.mkdir()
-    _, semantics, compiled = robot_bundle(robot_path)
+    _, _, compiled = robot_bundle(robot_path)
     robot = portable_xml(Path(robot_path) / "robot.xml", output / "robot.xml")
-    # Newton 1.2's JOINT_TARGET path does not resolve position.dampratio.
-    # Use the actual compiled kv; never treat dampratio as a damping coefficient.
+    # Materialize compiled gains instead of relying on importer dampratio handling.
+    # dampratio itself is not a damping coefficient.
     for actuator in robot.findall("actuator/*"):
         joint = compiled["joints"][actuator.attrib["joint"]]
         actuator.attrib.pop("dampratio", None)
@@ -90,9 +90,8 @@ def prepare_assets(human_path, robot_path, output):
     scene = portable_xml(Path(human_path) / "scene.xml", output / "object.xml")
     table = scene.find("worldbody/geom[@name='table']")
     scene.find("worldbody").remove(table)
-    for tag in ("keyframe",):
-        for node in scene.findall(tag):
-            scene.remove(node)
+    for node in scene.findall("keyframe"):
+        scene.remove(node)
     ET.ElementTree(scene).write(output / "object.xml")
     # Existing support loader accepts a Cube with full dimensions size*scale.
     pos = np.fromstring(table.attrib["pos"], sep=" ")
@@ -104,4 +103,3 @@ def prepare_assets(human_path, robot_path, output):
         f" double3 xformOp:scale = ({', '.join(map(str, size))})\n"
         ' uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]\n}\n'
     )
-    return model, semantics

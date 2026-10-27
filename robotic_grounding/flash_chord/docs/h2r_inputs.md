@@ -1,8 +1,18 @@
-# h2r_bench 共同输入：Sharpa Wave 双手
+# h2r_bench 工作流：Sharpa Wave 双手
 
 `flash_chord.h2r` 消费 h2r 的 human／scene bundle 与 `virtual_wrist_sharpa_wave_bimanual` robot bundle，在方法侧生成原生 MANO 特征、接触、Sharpa IK 和 FlashCHORD 参考。Bench 无需安装本方法的训练依赖。
 
-这条路径是共同机器人上的任务适配配方：30 Hz 控制、4 个物理子步、1× 示范、每手 6 个标量腕关节与 22 个手指关节。它保留原生手位姿残差、滤波、观测、奖励和训练主体；原生 ball 腕 checkpoint 不能直接复用。完整训练、共同 evaluator 客户端和共同成绩不属于这条输入链。
+这条路径是共同机器人上的任务适配配方：30 Hz 控制、4 个物理子步、1× 示范、每手 6 个标量腕关节与 22 个手指关节。它保留原生手位姿残差、滤波、观测、奖励和训练主体；原生 ball 腕 checkpoint 不能直接复用。
+
+| 入口 | 职责 |
+| --- | --- |
+| `python -m flash_chord.h2r.prepare` | 共同输入 → 方法特征、IK、封存参考 |
+| `scripts/train_flash_sac.py` | H2R 配方训练，使用 Newton／MuJoCo-Warp |
+| `scripts/evaluate_policy.py`、`scripts/view_policy.py` | 原生环境诊断与可视化 |
+| `python -m flash_chord.h2r.evaluation` | 通过 socket 接收 bench 状态、提交机器人位置目标 |
+| `python -m flash_chord.h2r.cpu_evaluation` | 同一共同模型上的独立 CPU 对齐检查 |
+
+正式共同 rollout 与指标由 bench 执行。准备产物、训练输出和检查记录放在代码目录外；不要删除 checkpoint 仍引用的 prepared 目录或修改其中的封存文件。
 
 ## 准备与运行
 
@@ -28,28 +38,26 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 准备入口拒绝覆盖已有输出目录；失败时保留中间产物供诊断。`features`、`ik`、`seal` 子阶段可以通过 `--output` 显式重跑，`features` 还需要 `--mano-root`。只有全部阶段成功后生成的 `h2r_binding.json` 才是训练输入。不要把 `processed.parquet` 单独传给原生配方。
 
 ```bash
-# 仅验证启动、参数更新和保存的 smoke；预算和 replay 容量不是正式训练配方。
+# 使用完整 H2R 配方；TRAIN_OUTPUT 指向新的外部输出目录。
 "$FLASH_PY" scripts/train_flash_sac.py \
   experiment=h2r_sharpa_flash_sac \
   task.parquet="$PREPARED/h2r_binding.json" \
-  scene.world_count=4 \
-  training.total_environment_steps=128 \
-  training.updates_per_collection=1 \
-  training.replay.capacity=256 \
-  training.replay.minimum_size=16 \
-  training.replay.batch_size=16 \
-  training.checkpoint.save_interval_environment_steps=128 \
   logging.mode=disabled \
   output_dir="$TRAIN_OUTPUT"
 
+# CHECKPOINT 指向已保存的 policy_*.safetensors。
 "$FLASH_PY" scripts/evaluate_policy.py \
-  evaluation.checkpoint="$TRAIN_OUTPUT/policy_128.safetensors" \
+  evaluation.checkpoint="$CHECKPOINT" \
   evaluation.world_count=2 \
   evaluation.metrics_output="$TRAIN_OUTPUT/readback.json" \
   logging.mode=disabled
+
+"$FLASH_PY" scripts/view_policy.py \
+  evaluation.checkpoint="$CHECKPOINT" \
+  viewer.backend=viser markers.enabled=false
 ```
 
-第二个命令使用 checkpoint 中的配置重建方法环境，检查读回与推理；输出是方法内部诊断，不是 h2r 共同测评成绩。正式训练沿用 `h2r_sharpa_flash_sac` 的完整预算，须另行确定实验设置与验收。
+原生评估与 viewer 使用 checkpoint 中的配置重建方法环境，不代表 h2r 共同成绩。H2R 末阶段的部署初始化已通过续训验证；新增课程的完整从头训练尚未重新验证。更改当前 YAML 不会更改旧 checkpoint 中的配置。
 
 ## 训练初始化与部署初始化
 
@@ -87,17 +95,17 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 - 物体直接派生 MJCF，避免不必要的 URDF 转换；`ObjectAssetSpec.urdf_path` 沿用原生字段名，在 H2R 专用 scene 中指向此 MJCF。不回退同名 ARCTIC 资产、不再分解碰撞网格、不添加无限地面。保留固定连杆以便逐 body 核对惯量和 frame。
 - 名义物理以共同包为准，覆盖原生场景的摩擦和 solver 默认值。只有控制时钟写在 H2R experiment 中；通用 `sim`／`scene.contact_friction` 默认值不覆盖共同包。VOC、随机 reset 和训练课程仍为方法训练机制，不能用于将来的共同评估。
 
-依赖锁定为 MuJoCo / MuJoCo-Warp 3.11.0、Warp 1.16.0、Newton 1.5.0，与 h2r_bench 评估环境的 MuJoCo 版本一致。Newton 1.2 使用的旧接口不能直接运行 MuJoCo-Warp 3.11。准备资产仍从 `compiled.json` 写入实际 `kp/kv`；局部 builder 保留共同虚拟腕／marker 的小惯量；CPU 检查模型和 GPU 模型均恢复共同 scalar joint 总限力开关。
+依赖以 `pyproject.toml`／`uv.lock` 为准：MuJoCo / MuJoCo-Warp 3.11.0、Warp 1.16.0、Newton 1.5.0。准备资产从 `compiled.json` 写入实际 `kp/kv`；局部 builder 保留共同虚拟腕／marker 的小惯量；CPU 检查模型和 GPU 模型均恢复共同 scalar joint 总限力开关。
 
 桌面几何来自共同场景导出的 `support.usda`，运行时通过 world-parented fixed joint 建立固定支撑，没有额外 q/DOF。不能用运动学 free joint 代替：Newton 为其增加的巨大 armature 会放大 GPU `meaninertia`，使整个场景提前停止求解。FlashCHORD 的 MuJoCo solver 显式开启 MultiCCD。H2R 还显式写入共同 `margin/gap` 和 raw `solref`，防止 Newton 默认接触包络或原始手指垫材料覆盖共同条件。
 
-H2R 训练配方设置 `sim.njmax=1024`，为共同机器人与详细物体碰撞分配每个 world 的约束容量；此项由方法配置直接传给求解器，不改变共同物理参数。旧 checkpoint 保存的容量不会随配方更新而变化，使用 `scripts/view_policy.py` 加载时应显式传入 `sim.njmax=1024`，该覆盖会同步到实际使用的 `env.sim.njmax`。`scripts/evaluate_policy.py` 当前直接读取 checkpoint 配置，不提供此覆盖入口，不能仅修改训练 YAML 就认为旧 checkpoint 的评估容量已更新。
+H2R 配方设置 `sim.njmax=1024`，为每个 world 分配约束容量。solver 的物理参数来自共同包，容量来自方法配置；两者在同一创建入口组装，之后校验实际 CPU／GPU 模型。
 
 每次创建 solver 都检查最终 MuJoCo 模型的关节、质量、COM、惯量、重力补偿、位置驱动 gain／bias／限幅、接触参数、碰撞凸包、有效碰撞配对和桌面尺寸；额外核验动态自由度、固定支撑、物理开关，以及实际 GPU 模型的 armature、meaninertia 和接触参数。错误在训练前抛出；这些检查不宣称 MuJoCo CPU 与 MuJoCo-Warp 长时闭环轨迹完全相同。
 
 环境 reset 在恢复参考状态后，按 world 调用 Newton solver reset，保留参考 q/qvel 并清理 warmstart、外力和 actuator 缓存；接触观测也按 world 清空。ReplayRunner 同样清理 solver 历史。以上操作支持捕获进 CUDA graph，不影响未选中的 world。`evaluation.deterministic=true` 只选择确定性 actor，默认 MuJoCo-Warp 的并行浮点归约与接触排列仍不保证多圈或独立进程逐位相同；不能据此将 viewer 第一圈当作完整重复性验证。
 
-旧 checkpoint 的网络仍可加载，但修正桌面、MultiCCD 和依赖版本会改变原生训练／rollout 物理。旧产物不应标为已在当前物理条件训练；重新运行和训练须另存输出，不能覆盖旧结果。
+物理条件不同的旧 checkpoint 不应标为已在当前条件训练；重新运行和训练须另存输出。
 
 ## 本地检查
 
