@@ -45,3 +45,13 @@ def test_console_progress_requires_positive_total_and_start(tmp_path):
     progress = ConsoleTrainingProgress(1, tmp_path)
     with pytest.raises(RuntimeError, match="must be started"):
         progress.update(1)
+
+
+def test_console_progress_reports_nonfinite_episode_ratio_without_logger(capsys, tmp_path):
+    progress = ConsoleTrainingProgress(100, tmp_path)
+    progress.start(0)
+    progress.update(1, nonfinite_episodes=0, completed_episodes=0)
+    progress.update(100, nonfinite_episodes=3, completed_episodes=1200)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1].endswith("nonfinite episodes: 0/0 (n/a)")
+    assert lines[2].endswith("nonfinite episodes: 3/1,200 (0.25%)")

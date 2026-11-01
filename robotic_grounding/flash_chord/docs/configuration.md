@@ -24,6 +24,22 @@ Training curricula are method logic; they do not redefine benchmark initializati
 Network, optimizer, replay and reward settings remain configurable. The H2R-only change does not change
 these parameters. A new configuration does not retroactively change a saved checkpoint.
 
+## Numerical failures during training
+
+FlashSAC checks each terminal transition before auto-reset, including raw physics state and raw policy
+input actions (before clipping). A non-finite value ends and resets only the affected world. The invalid
+transition and every n-step window depending on it are excluded from replay; reward normalization also
+excludes the invalid step and clears that world's return accumulator. Completed earlier episodes keep
+their original termination/truncation and bootstrap semantics. Invalid rows are never training samples.
+A non-finite initial or post-reset observation/context stops training before the next policy inference.
+
+`episode/nonfinite_episode_rate` is the cumulative number of numerically failed episodes divided by all
+completed episodes, including numerical failures, since the current training invocation. Each failed
+episode counts once even if it also reaches an ordinary termination or reference end. The window metric
+is `episode/nonfinite_fraction_per_completed_episode`. Console progress shows the cumulative numerator,
+denominator and percentage even with external logging disabled. These counters restart on resume.
+This protects healthy training from environment failures; it does not repair an already corrupted policy.
+
 ## Checkpoints
 
 Checkpoints embed the resolved configuration and policy/critic schemas. Training resume, evaluation and
@@ -31,6 +47,8 @@ policy viewing reject native checkpoints and require the same sealed H2R referen
 files must remain available; moving them requires keeping checkpoint paths resolvable.
 
 `policy_<steps>.safetensors` contains the actor; `state_<steps>.safetensors` contains resumable training state.
+Replay snapshots now include pending-transition validity; older replay snapshots must be discarded
+when resuming (compact training-state and policy formats are unchanged).
 Historical native files remain on disk but are not supported by this fork's application entry points.
 
 ## Viewer and diagnostic evaluation

@@ -28,7 +28,7 @@ from flash_chord.lifecycle.reset import (
     ResetSpec,
 )
 from flash_chord.lifecycle.termination import Termination
-from flash_chord.objectives.composition import Objective
+from flash_chord.objectives.composition import Objective, ObjectiveDiagnostics
 from flash_chord.runtime.actions import Action, PolicyAction
 from flash_chord.scene.builder import Scene
 
@@ -110,6 +110,58 @@ def publish_critic_context(
             for axis in range(3):
                 context[velocity_output + axis] = linear[axis]
                 context[velocity_output + 3 + axis] = angular[axis]
+
+
+@wp.kernel
+def check_transition_finite(
+    joint_q: wp.array(dtype=wp.float32),
+    joint_qd: wp.array(dtype=wp.float32),
+    body_q: wp.array(dtype=wp.transform),
+    body_qd: wp.array(dtype=wp.spatial_vector),
+    action: wp.array(dtype=wp.float32),
+    observation: wp.array(dtype=wp.float32),
+    context: wp.array(dtype=wp.float32),
+    terms: wp.array(dtype=wp.float32),
+    q_count: int,
+    dof_count: int,
+    body_count: int,
+    action_dim: int,
+    observation_dim: int,
+    context_dim: int,
+    term_count: int,
+    score: wp.array(dtype=wp.float32),
+    terminated: wp.array(dtype=wp.int32),
+    valid: wp.array(dtype=wp.int32),
+) -> None:
+    """Detect numerical failure before auto-reset can hide a corrupt terminal state."""
+    w = wp.tid()
+    finite = wp.isfinite(score[w])
+    for i in range(q_count):
+        finite = finite and wp.isfinite(joint_q[w * q_count + i])
+    for i in range(dof_count):
+        finite = finite and wp.isfinite(joint_qd[w * dof_count + i])
+    for i in range(body_count):
+        pose = body_q[w * body_count + i]
+        position = wp.transform_get_translation(pose)
+        rotation = wp.transform_get_rotation(pose)
+        for axis in range(3):
+            finite = finite and wp.isfinite(position[axis])
+        for axis in range(4):
+            finite = finite and wp.isfinite(rotation[axis])
+        for axis in range(6):
+            finite = finite and wp.isfinite(body_qd[w * body_count + i][axis])
+    for i in range(action_dim):
+        finite = finite and wp.isfinite(action[w * action_dim + i])
+    for i in range(observation_dim):
+        finite = finite and wp.isfinite(observation[w * observation_dim + i])
+    for i in range(context_dim):
+        finite = finite and wp.isfinite(context[w * context_dim + i])
+    for i in range(term_count):
+        finite = finite and wp.isfinite(terms[w * term_count + i])
+    valid[w] = int(finite)
+    if not finite:
+        terminated[w] = 1
+        score[w] = 0.0
 
 
 @wp.kernel
@@ -315,6 +367,7 @@ class RLEnv(BaseEnv):
         self.done = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
         self.truncation = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
         self.reset_mask = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
+        self.transition_valid = wp.ones(self.world_count, dtype=wp.int32, device=self.device)
         self.running_return = wp.zeros(self.world_count, dtype=wp.float32, device=self.device)
         self.running_length = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
         self.episode_return = wp.zeros(self.world_count, dtype=wp.float32, device=self.device)
@@ -391,6 +444,31 @@ class RLEnv(BaseEnv):
         if self.config.capture_terminal_state:
             self.observation_strategy.compute_into(self.state_0, self.terminal_observation)
             self._compute_critic_context(self.state_0, self.terminal_critic_context)
+            terms = self.objective.terms if isinstance(self.objective, ObjectiveDiagnostics) else self.objective.score
+            wp.launch(
+                check_transition_finite,
+                dim=self.world_count,
+                inputs=[
+                    self.state_0.joint_q,
+                    self.state_0.joint_qd,
+                    self.state_0.body_q,
+                    self.state_0.body_qd,
+                    self.action_input,
+                    self.terminal_observation,
+                    self.terminal_critic_context,
+                    terms,
+                    self.state_0.joint_q.shape[0] // self.world_count,
+                    self.state_0.joint_qd.shape[0] // self.world_count,
+                    self.state_0.body_q.shape[0] // self.world_count,
+                    self.action.action_dim,
+                    self.observation_dim,
+                    len(self.critic_context_names),
+                    terms.shape[0] // self.world_count,
+                    self.objective.score,
+                    self.terminated,
+                ],
+                outputs=[self.transition_valid],
+            )
         wp.launch(
             publish_rl_transition,
             dim=self.world_count,
@@ -473,14 +551,12 @@ class RLEnv(BaseEnv):
         """Advance one RL step and return observation, reward, done, and truncation buffers."""
         if action is not None and action.shape != self.action_input.shape:
             raise ValueError(f"action has shape {action.shape}; expected {self.action_input.shape}")
+        if action is not None and action is not self.action_input:
+            wp.copy(self.action_input, action)
+        self.action.process(self.action_input, self.timestep, self.state_0)
         if self._step_graph is None:
-            action_input = self.action_input if action is None else action
-            self.action.process(action_input, self.timestep, self.state_0)
             self._rl_step()
         else:
-            if action is not None and action is not self.action_input:
-                wp.copy(self.action_input, action)
-            self.action.process(self.action_input, self.timestep, self.state_0)
             wp.capture_launch(self._step_graph)
         return self.observation, self.reward, self.done, self.truncation
 

@@ -598,3 +598,29 @@ def test_runner_resumes_compact_state_and_validates_saved_schemas(tmp_path):
             resumed_config,
             checkpoint_metadata=_checkpoint_metadata(friction=0.0),
         )
+
+
+def test_runner_logs_numerical_failures_as_exclusive_episode_outcome():
+    jax, jnp = _dependencies()
+    from flash_chord.training.flash_sac.runner import run_training
+
+    class NonfiniteEnv(_Env):
+        def step(self, action):
+            step = super().step(action)
+            if self.step_count == 2:
+                # Failure coincides with a reference end in world 1.
+                return step.replace(
+                    terminal_observation=step.terminal_observation.at[1].set(jnp.nan),
+                    transition_valid=jnp.asarray([True, False]),
+                )
+            return step
+
+    logger = _Logger()
+    learner = run_training(NonfiniteEnv(jnp), _config(), logger=logger, log_interval=2)
+    assert int(learner.logging.nonfinite_episode_count_total) == 1
+    assert int(learner.logging.episode_count_total) == 2
+    final = logger.records[-1][1]
+    assert final["episode/nonfinite_episode_rate"] == 0.5
+    assert final["termination/reference_end_fraction_per_completed_episode"] == 0.0
+    assert all(np.isfinite(value) for _, metrics in logger.records for value in metrics.values())
+    assert all(np.isfinite(np.asarray(x)).all() for x in jax.tree.leaves(learner.actor))

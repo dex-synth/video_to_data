@@ -446,3 +446,40 @@ def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable(h2r_set
     for name in eager:
         # The common scene retains contacts; GPU contact reductions are not bitwise deterministic.
         np.testing.assert_allclose(captured[name], eager[name], atol=1.0e-4, rtol=1.0e-5)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("captured", [False, True])
+@pytest.mark.parametrize("failure", ["physics", "raw_action"])
+def test_nonfinite_world_is_reset_before_next_policy_observation(h2r_setup, h2r_config, captured, failure):
+    import warp as wp
+
+    with wp.ScopedDevice("cuda:0"):
+        _, env = _build_h2r_rl_env(h2r_setup, h2r_config, "env.auto_reset=true")
+        env.reset(frame_id=0)
+        inject = wp.array([[float("nan")] * 6], dtype=wp.spatial_vector)
+        if failure == "physics":
+            transition = env._transition
+
+            def corrupt_one_world():
+                transition()
+                # Inject after physics, before diagnostics/auto-reset, in one world only.
+                wp.copy(env.state_0.body_qd, inject, count=1)
+                env.terminated.zero_()
+                env.truncated.zero_()
+
+            env._transition = corrupt_one_world
+        if captured:
+            env.capture_step()
+            env.reset(frame_id=0)
+        action = np.zeros(env.action_input.shape, dtype=np.float32)
+        if failure == "raw_action":
+            action[0] = np.nan
+        env.step(wp.array(action, dtype=wp.float32))
+        np.testing.assert_array_equal(env.transition_valid.numpy(), [0, 1])
+        np.testing.assert_array_equal(env.reset_mask.numpy(), [1, 0])
+        assert env.done.numpy()[0] == 1
+        assert np.isfinite(env.observation.numpy()).all()
+        assert np.isfinite(env.critic_context.numpy()).all()
+        for field in (env.state_0.joint_q, env.state_0.joint_qd, env.state_0.body_q, env.state_0.body_qd):
+            assert np.isfinite(field.numpy()).all()

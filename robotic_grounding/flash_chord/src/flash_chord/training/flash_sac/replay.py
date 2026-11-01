@@ -124,6 +124,7 @@ class ReplayInsert:
     next_observation: jax.Array
     critic_context: jax.Array
     next_critic_context: jax.Array
+    valid: jax.Array | None = None
 
 
 @flax.struct.dataclass
@@ -152,6 +153,7 @@ class PendingStorage:
     next_observation: jax.Array
     critic_context: jax.Array
     next_critic_context: jax.Array
+    valid: jax.Array
     size: jax.Array
     write_index: jax.Array
 
@@ -179,6 +181,7 @@ class ReplayBatch:
     next_observation: jax.Array
     critic_context: jax.Array
     next_critic_context: jax.Array
+    valid: jax.Array | None = None
 
 
 def replay_memory(spec: ReplaySpec) -> ReplayMemory:
@@ -192,7 +195,7 @@ def replay_memory(spec: ReplaySpec) -> ReplayMemory:
     return ReplayMemory(
         bytes_per_transition=bytes_per_transition,
         ring_bytes=spec.capacity * bytes_per_transition,
-        pending_bytes=pending_entries * bytes_per_transition,
+        pending_bytes=pending_entries * (bytes_per_transition + 1),
         counter_bytes=counter_bytes,
         sampled_batch_bytes=spec.batch_size * (4 * sampled_float_count + 2),
     )
@@ -228,6 +231,7 @@ def create_replay(spec: ReplaySpec, device: jax.Device | None = None) -> ReplayS
             next_observation=jnp.zeros((*pending_shape, spec.observation_dim), dtype=observation_dtype),
             critic_context=jnp.zeros((*pending_shape, spec.critic_context_dim), dtype=jnp.float32),
             next_critic_context=jnp.zeros((*pending_shape, spec.critic_context_dim), dtype=jnp.float32),
+            valid=jnp.zeros(pending_shape, dtype=jnp.bool_),
             size=jnp.asarray(0, dtype=jnp.int32),
             write_index=jnp.asarray(0, dtype=jnp.int32),
         )
@@ -252,6 +256,8 @@ def _validate_insert(state: ReplayState, transition: ReplayInsert) -> None:
         "critic_context": ((spec.world_count, spec.critic_context_dim), jnp.float32),
         "next_critic_context": ((spec.world_count, spec.critic_context_dim), jnp.float32),
     }
+    if transition.valid is not None:
+        expected["valid"] = ((spec.world_count,), jnp.bool_)
     for name, (shape, dtype) in expected.items():
         value = getattr(transition, name)
         if value.shape != shape:
@@ -272,6 +278,7 @@ def _write_pending(pending: PendingStorage, index: jax.Array, transition: Replay
         ),
         critic_context=pending.critic_context.at[index].set(transition.critic_context),
         next_critic_context=pending.next_critic_context.at[index].set(transition.next_critic_context),
+        valid=pending.valid.at[index].set(transition.valid),
     )
 
 
@@ -282,6 +289,7 @@ def _aggregate_pending(pending: PendingStorage, transition: ReplayInsert, spec: 
     truncated = transition.truncated
     next_observation = transition.next_observation
     next_critic_context = transition.next_critic_context
+    valid = transition.valid
     pending_count = spec.n_step - 1
 
     for offset in reversed(range(pending_count)):
@@ -289,6 +297,8 @@ def _aggregate_pending(pending: PendingStorage, transition: ReplayInsert, spec: 
         prior_terminated = pending.terminated[index]
         prior_truncated = pending.truncated[index]
         done = jnp.logical_or(prior_terminated, prior_truncated)
+        # A completed earlier episode does not depend on later transitions.
+        valid = pending.valid[index] & jnp.where(done, True, valid)
         discounted_terms = pending.objective_terms[index] + spec.discount * discounted_terms * (~done[:, None])
         terminated = jnp.where(done, prior_terminated, terminated)
         truncated = jnp.where(done, prior_truncated, truncated)
@@ -309,6 +319,7 @@ def _aggregate_pending(pending: PendingStorage, transition: ReplayInsert, spec: 
         next_observation=next_observation,
         critic_context=pending.critic_context[oldest],
         next_critic_context=next_critic_context,
+        valid=valid,
     )
 
 
@@ -322,38 +333,56 @@ def _one_step_batch(transition: ReplayInsert) -> ReplayBatch:
         next_observation=transition.next_observation,
         critic_context=transition.critic_context,
         next_critic_context=transition.next_critic_context,
+        valid=transition.valid,
     )
 
 
 def _append_batch(state: ReplayState, batch: ReplayBatch) -> ReplayState:
     spec = state.spec
-    indices = (state.write_index + jnp.arange(spec.world_count, dtype=jnp.int32)) % spec.capacity
+    valid = batch.valid if batch.valid is not None else jnp.ones(spec.world_count, dtype=jnp.bool_)
+    valid = valid & jnp.all(jnp.isfinite(batch.discounted_objective_terms), axis=1)
+    # Compact valid worlds; out-of-bounds scatter indices discard invalid rows.
+    offsets = jnp.cumsum(valid, dtype=jnp.int32) - 1
+    indices = jnp.where(valid, (state.write_index + offsets) % spec.capacity, spec.capacity)
     storage = state.storage.replace(
         observation=state.storage.observation.at[indices].set(
-            batch.observation.astype(state.storage.observation.dtype)
+            batch.observation.astype(state.storage.observation.dtype), mode="drop"
         ),
-        action=state.storage.action.at[indices].set(batch.action),
+        action=state.storage.action.at[indices].set(batch.action, mode="drop"),
         discounted_objective_terms=state.storage.discounted_objective_terms.at[indices].set(
-            batch.discounted_objective_terms
+            batch.discounted_objective_terms, mode="drop"
         ),
-        terminated=state.storage.terminated.at[indices].set(batch.terminated),
-        truncated=state.storage.truncated.at[indices].set(batch.truncated),
+        terminated=state.storage.terminated.at[indices].set(batch.terminated, mode="drop"),
+        truncated=state.storage.truncated.at[indices].set(batch.truncated, mode="drop"),
         next_observation=state.storage.next_observation.at[indices].set(
-            batch.next_observation.astype(state.storage.next_observation.dtype)
+            batch.next_observation.astype(state.storage.next_observation.dtype), mode="drop"
         ),
-        critic_context=state.storage.critic_context.at[indices].set(batch.critic_context),
-        next_critic_context=state.storage.next_critic_context.at[indices].set(batch.next_critic_context),
+        critic_context=state.storage.critic_context.at[indices].set(batch.critic_context, mode="drop"),
+        next_critic_context=state.storage.next_critic_context.at[indices].set(batch.next_critic_context, mode="drop"),
     )
+    valid_count = valid.sum(dtype=jnp.int32)
     return state.replace(
         storage=storage,
-        size=jnp.minimum(state.size + spec.world_count, spec.capacity),
-        write_index=(state.write_index + spec.world_count) % spec.capacity,
+        size=jnp.minimum(state.size + valid_count, spec.capacity),
+        write_index=(state.write_index + valid_count) % spec.capacity,
     )
 
 
 def _insert_replay(state: ReplayState, transition: ReplayInsert) -> ReplayState:
     """Pure insertion implementation used by the composed learner executable."""
     _validate_insert(state, transition)
+    valid = transition.valid if transition.valid is not None else jnp.ones(state.spec.world_count, dtype=jnp.bool_)
+    payload = ("observation", "action", "objective_terms", "next_observation", "critic_context", "next_critic_context")
+    for name in payload:
+        value = getattr(transition, name)
+        if name in ("observation", "next_observation"):
+            value = value.astype(state.storage.observation.dtype)
+        valid = valid & jnp.all(jnp.isfinite(value), axis=1)
+    # Invalid rows stay finite while pending, but are never committed as samples.
+    transition = transition.replace(
+        valid=valid,
+        **{name: jnp.where(valid[:, None], getattr(transition, name), 0.0) for name in payload},
+    )
     pending_count = state.spec.n_step - 1
     if pending_count == 0:
         return _append_batch(state, _one_step_batch(transition))

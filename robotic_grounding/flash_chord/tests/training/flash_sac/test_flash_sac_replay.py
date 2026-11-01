@@ -109,11 +109,11 @@ def test_mixer_memory_accounting_and_allocation_shapes_are_exact():
     memory = replay_memory(mixer_1024)
     assert memory.bytes_per_transition == 6_062
     assert memory.ring_bytes == 6_062_000_000
-    assert memory.pending_bytes == 12_414_976
+    assert memory.pending_bytes == 12_417_024
     assert memory.counter_bytes == 16
     assert memory.sampled_batch_bytes == 12_414_976
-    assert memory.total_bytes == 6_074_414_992
-    assert replay_memory(_spec(**{**mixer_1024.__dict__, "world_count": 4_096})).total_bytes == 6_111_659_920
+    assert memory.total_bytes == 6_074_417_040
+    assert replay_memory(_spec(**{**mixer_1024.__dict__, "world_count": 4_096})).total_bytes == 6_111_668_112
 
     state = create_replay(_spec(capacity=8, minimum_size=2, batch_size=2, world_count=2))
     assert state.storage.observation.shape == (8, 1)
@@ -143,10 +143,10 @@ def test_float16_observation_storage_fits_ten_million_dexmate_transitions_and_sa
     memory = replay_memory(dexmate_2048)
     assert memory.bytes_per_transition == 3_414
     assert memory.ring_bytes == 34_140_000_000
-    assert memory.pending_bytes == 13_983_744
+    assert memory.pending_bytes == 13_987_840
     assert memory.counter_bytes == 16
     assert memory.sampled_batch_bytes == 13_365_248
-    assert memory.total_bytes == 34_153_983_760
+    assert memory.total_bytes == 34_153_987_856
 
     state = create_replay(
         _spec(
@@ -416,3 +416,41 @@ def test_fixed_bootstrap_discount_matches_upstream_without_effective_horizon():
     spec = _spec()
     assert spec.bootstrap_discount == pytest.approx(0.9**3)
     assert "effective_horizon" not in ReplayStorage.__dataclass_fields__
+
+
+@pytest.mark.parametrize("n_step", [1, 3])
+def test_invalid_windows_are_dropped_without_crossing_episode_boundaries(n_step):
+    _, jnp = _dependencies()
+    from flash_chord.training.flash_sac.replay import create_replay, insert_replay
+
+    state = create_replay(_spec(world_count=1, minimum_size=1, batch_size=1, n_step=n_step, objective_term_count=1))
+    # Episode A ends normally at step 0. Episode B fails at step 2.
+    # A's sample survives; B's entire affected window is dropped; C starts at 3.
+    for step in range(6):
+        transition = _scalar_transition(jnp, step, 0, 1, terminated=step in (0, 2))
+        if step == 2:
+            transition = transition.replace(next_observation=jnp.asarray([[jnp.nan]], dtype=jnp.float32))
+        state = insert_replay(state, transition)
+    expected = [0, 1, 3, 4, 5] if n_step == 1 else [0, 3]
+    np.testing.assert_array_equal(np.asarray(state.storage.observation[: int(state.size), 0]), expected)
+    for leaf in (state.storage.observation, state.storage.next_observation, state.pending.next_observation):
+        assert np.isfinite(np.asarray(leaf)).all()
+
+
+def test_invalid_worlds_are_compacted_across_ring_wrap_and_all_invalid_does_not_advance():
+    jax, jnp = _dependencies()
+    from flash_chord.training.flash_sac.replay import create_replay, insert_replay
+
+    state = create_replay(_spec(capacity=8, n_step=1))
+    for step in range(3):
+        transition = _oracle_transition(step, jnp).replace(
+            valid=jnp.asarray([True, False, True, False, False, True, False])
+        )
+        state = insert_replay(state, transition)
+    assert int(state.size) == 8
+    assert int(state.write_index) == 1
+    np.testing.assert_array_equal(np.asarray(state.storage.observation[:, 0]), [205, 2, 5, 100, 102, 105, 200, 202])
+    before = [np.array(x) for x in jax.tree.leaves(state)]
+    state = insert_replay(state, transition.replace(valid=jnp.zeros(7, dtype=jnp.bool_)))
+    for actual, expected in zip(jax.tree.leaves(state), before, strict=True):
+        np.testing.assert_array_equal(np.asarray(actual), expected)

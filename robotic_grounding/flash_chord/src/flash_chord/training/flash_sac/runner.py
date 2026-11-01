@@ -40,7 +40,7 @@ from flash_chord.training.flash_sac.learner import (
     create_learner,
     reset_context_indices,
 )
-from flash_chord.training.progress import TrainingProgress
+from flash_chord.training.progress import ConsoleTrainingProgress, TrainingProgress
 
 _DEVICE_PATTERN = re.compile(r"^(cuda|gpu|cpu)(?::([0-9]+))?$")
 
@@ -103,6 +103,7 @@ def _compile_executables(
         next_critic_context=jnp.zeros_like(learner.critic_context),
         post_reset_observation=jnp.zeros_like(learner.observation),
         post_reset_critic_context=jnp.zeros_like(learner.critic_context),
+        valid=jax.device_put(np.ones(world_count, dtype=np.bool_), device),
     )
     consume_transition = executables.consume_transition.lower(
         learner,
@@ -230,6 +231,13 @@ class WandbLogger:
 def metric_definitions(env: WarpRLEnv) -> dict[str, str]:
     """Return exact aggregation semantics stored with each FlashSAC W&B run."""
     definitions = {
+        "episode/nonfinite_fraction_per_completed_episode": (
+            "Fraction of completed episodes with numerical failure since the previous log."
+        ),
+        "episode/nonfinite_episode_rate": (
+            "Numerically failed episodes / all completed episodes since this training invocation; "
+            "failed episodes are included in the denominator and counted once."
+        ),
         "reward/total_mean_per_env_step": (
             "Arithmetic mean composed reward across every world-step since the previous log."
         ),
@@ -320,8 +328,12 @@ def metrics_to_host(
     episode_count = float(np.asarray(learner.episode_count))
     denominator = max(episode_count, 1.0)
     reference_end_count = float(np.asarray(learner.reference_end_count))
+    nonfinite_count = float(np.asarray(learner.nonfinite_episode_count))
     replay_size = float(np.asarray(learner.replay_size))
     output = {
+        "episode/nonfinite_fraction_per_completed_episode": nonfinite_count / denominator,
+        "episode/nonfinite_episode_rate": float(np.asarray(learner.nonfinite_episode_count_total))
+        / max(float(np.asarray(learner.episode_count_total)), 1.0),
         "reward/total_mean_per_env_step": float(np.asarray(learner.reward_mean_per_env_step)),
         "episode/return_mean_per_completed_episode": float(
             np.asarray(learner.episode_return_mean_per_completed_episode)
@@ -374,7 +386,7 @@ def metrics_to_host(
         )
     for name, count in zip(termination_cause_names, cause_counts, strict=True):
         output[f"termination/{name}_fraction_per_completed_episode"] = float(count) / denominator
-    classified_count = reference_end_count + float(cause_counts.sum())
+    classified_count = reference_end_count + float(cause_counts.sum()) + nonfinite_count
     if not np.isclose(classified_count, episode_count):
         raise ValueError(
             f"exclusive outcome counts sum to {classified_count}; expected completed episode count {episode_count}"
@@ -451,6 +463,8 @@ def _run_training(
     env.set_curriculum(initial_stage)
     initial_observation = jax.device_put(jnp.array(env.reset(), copy=True), jax_device)
     initial_context = jax.device_put(jnp.array(env.initial_critic_context, copy=True), jax_device)
+    if not np.isfinite(np.asarray(initial_observation)).all() or not np.isfinite(np.asarray(initial_context)).all():
+        raise ValueError("Non-finite initial observation or critic context")
     learner, executables = create_learner(
         config,
         initial_observation,
@@ -576,6 +590,11 @@ def _run_training(
                 next_critic_context=step.terminal_critic_context,
                 post_reset_observation=step.observation,
                 post_reset_critic_context=step.critic_context,
+                valid=(
+                    step.transition_valid
+                    if step.transition_valid is not None
+                    else jnp.ones(config.world_count, dtype=jnp.bool_)
+                ),
             ),
             objective_weights,
             frame_dt,
@@ -587,7 +606,14 @@ def _run_training(
         steps_since_log += config.world_count
         collection_index = next_collection_index
         if progress is not None:
-            progress.update(environment_steps)
+            if isinstance(progress, ConsoleTrainingProgress):
+                progress.update(
+                    environment_steps,
+                    nonfinite_episodes=learner_metrics.nonfinite_episode_count_total,
+                    completed_episodes=learner_metrics.episode_count_total,
+                )
+            else:
+                progress.update(environment_steps)
 
         if logger is not None and logging_boundary:
             jax.block_until_ready(learner_metrics.critic_loss_mean_per_update)

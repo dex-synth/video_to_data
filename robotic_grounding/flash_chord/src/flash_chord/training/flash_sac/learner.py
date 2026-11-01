@@ -136,6 +136,9 @@ class LoggingState:
     tracking_error_sum: jax.Array
     action_abs_sum: jax.Array
     optimizer: _MetricAccumulator
+    nonfinite_episode_count: jax.Array
+    episode_count_total: jax.Array
+    nonfinite_episode_count_total: jax.Array
 
 
 @flax.struct.dataclass
@@ -173,6 +176,7 @@ class Transition:
     next_critic_context: jax.Array
     post_reset_observation: jax.Array
     post_reset_critic_context: jax.Array
+    valid: jax.Array | None = None
 
 
 @flax.struct.dataclass
@@ -201,6 +205,9 @@ class LearnerMetrics:
     replay_size: jax.Array
     reward_scale_denominator: jax.Array
     loss_scale: jax.Array
+    nonfinite_episode_count: jax.Array
+    episode_count_total: jax.Array
+    nonfinite_episode_count_total: jax.Array
 
 
 @dataclass(frozen=True)
@@ -311,6 +318,9 @@ def _zero_logging_state(
         tracking_error_sum=jnp.zeros(tracking_error_count, dtype=jnp.float32),
         action_abs_sum=jnp.zeros((), dtype=jnp.float32),
         optimizer=_zero_metrics(),
+        nonfinite_episode_count=jnp.zeros((), dtype=jnp.int32),
+        episode_count_total=jnp.zeros((), dtype=jnp.int32),
+        nonfinite_episode_count_total=jnp.zeros((), dtype=jnp.int32),
     )
 
 
@@ -328,6 +338,7 @@ def reset_logging_window(state: LoggingState) -> LoggingState:
         tracking_error_sum=jnp.zeros_like(state.tracking_error_sum),
         action_abs_sum=jnp.zeros_like(state.action_abs_sum),
         optimizer=_zero_metrics(),
+        nonfinite_episode_count=jnp.zeros_like(state.nonfinite_episode_count),
     )
 
 
@@ -352,7 +363,7 @@ def _accumulate_logging(
 
     cause_count = state.termination_cause_count.shape[0]
     raw_causes = transition.termination_diagnostics[:, :cause_count].astype(jnp.bool_)
-    remaining = terminated
+    remaining = terminated & transition.valid
     cause_increments = []
     for index in range(cause_count):
         selected = jnp.logical_and(remaining, raw_causes[:, index])
@@ -387,6 +398,9 @@ def _accumulate_logging(
         tracking_error_sum=state.tracking_error_sum + tracking_errors.sum(axis=0),
         action_abs_sum=state.action_abs_sum + jnp.abs(transition.action).sum(),
         optimizer=_add_metrics(state.optimizer, optimizer_metrics),
+        nonfinite_episode_count=state.nonfinite_episode_count + (~transition.valid).sum(dtype=jnp.int32),
+        episode_count_total=state.episode_count_total + completed.sum(dtype=jnp.int32),
+        nonfinite_episode_count_total=state.nonfinite_episode_count_total + (~transition.valid).sum(dtype=jnp.int32),
     )
 
 
@@ -467,6 +481,9 @@ def _finalize_metrics(
             bound=config.reward_normalization.normalized_return_bound,
         ),
         loss_scale=state.loss_scale.scale,
+        nonfinite_episode_count=logging.nonfinite_episode_count,
+        episode_count_total=logging.episode_count_total,
+        nonfinite_episode_count_total=logging.nonfinite_episode_count_total,
     )
 
 
@@ -485,6 +502,8 @@ def _validate_transition(state: LearnerState, transition: Transition, objective_
         "post_reset_observation": ((replay.world_count, replay.observation_dim), jnp.float32),
         "post_reset_critic_context": ((replay.world_count, replay.critic_context_dim), jnp.float32),
     }
+    if transition.valid is not None:
+        expected["valid"] = ((replay.world_count,), jnp.bool_)
     for name, (shape, dtype) in expected.items():
         value = getattr(transition, name)
         if value.shape != shape:
@@ -1022,6 +1041,37 @@ def create_learner(
         reset_logging: jax.Array,
     ) -> tuple[LearnerState, jax.Array, LearnerMetrics]:
         _validate_transition(learner, transition, objective_weights)
+        valid = transition.valid if transition.valid is not None else jnp.ones(config.world_count, dtype=jnp.bool_)
+        for value in (
+            learner.observation,
+            learner.critic_context,
+            transition.action,
+            transition.objective_terms,
+            transition.next_observation,
+            transition.next_critic_context,
+        ):
+            valid = valid & jnp.all(jnp.isfinite(value), axis=1)
+        transition = transition.replace(
+            valid=valid,
+            terminated=jnp.where(valid, transition.terminated, 1),
+            action=jnp.where(valid[:, None], transition.action, 0.0),
+            objective_terms=jnp.where(valid[:, None], transition.objective_terms, 0.0),
+            termination_diagnostics=jnp.where(valid[:, None], transition.termination_diagnostics, 0.0),
+            episode_reference_progress=jnp.where(
+                jnp.isfinite(transition.episode_reference_progress), transition.episode_reference_progress, 0.0
+            ),
+        )
+
+        def reject_bad_reset():
+            def fail():
+                raise RuntimeError("Non-finite observation or critic context after reset")
+
+            jax.debug.callback(fail)
+
+        reset_finite = jnp.all(jnp.isfinite(transition.post_reset_observation)) & jnp.all(
+            jnp.isfinite(transition.post_reset_critic_context)
+        )
+        jax.lax.cond(reset_finite, lambda: None, reject_bad_reset)
         if frame_dt.shape != () or frame_dt.dtype != jnp.dtype(jnp.float32):
             raise TypeError(f"frame_dt must be a float32 scalar, got {frame_dt.shape}/{frame_dt.dtype}")
         if target_voc_scale.shape != () or target_voc_scale.dtype != jnp.dtype(jnp.float32):
@@ -1065,6 +1115,7 @@ def create_learner(
                 truncated,
                 discount=config.discount,
                 moments_epsilon=config.reward_normalization.running_moments_epsilon,
+                valid=valid,
             )
         replay = _insert_replay(
             replay,
@@ -1077,6 +1128,7 @@ def create_learner(
                 next_observation=transition.next_observation,
                 critic_context=learner.critic_context,
                 next_critic_context=transition.next_critic_context,
+                valid=valid,
             ),
         )
         learner = learner.replace(

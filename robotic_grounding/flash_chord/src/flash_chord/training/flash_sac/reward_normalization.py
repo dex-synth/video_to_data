@@ -51,6 +51,7 @@ def update_running_moments(
     state: RunningMomentsState,
     samples: jax.Array,
     epsilon: float = 1.0e-4,
+    valid: jax.Array | None = None,
 ) -> RunningMomentsState:
     """Merge one vector batch using upstream's biased variance and epsilon ordering."""
     if samples.ndim != 1 or samples.shape[0] == 0:
@@ -60,18 +61,22 @@ def update_running_moments(
     if not math.isfinite(epsilon) or epsilon <= 0.0:
         raise ValueError(f"epsilon must be finite and positive, got {epsilon}")
 
-    sample_mean = jnp.mean(samples)
-    sample_variance = jnp.var(samples)
-    sample_count = jnp.asarray(samples.shape[0], dtype=jnp.float32)
+    if valid is None:
+        valid = jnp.ones_like(samples, dtype=jnp.bool_)
+    sample_count = valid.sum(dtype=jnp.float32)
+    sample_mean = jnp.where(valid, samples, 0.0).sum() / jnp.maximum(sample_count, 1.0)
+    centered = jnp.where(valid, samples - sample_mean, 0.0)
+    sample_variance = jnp.square(centered).sum() / jnp.maximum(sample_count, 1.0)
     delta = sample_mean - state.mean
     total_count = state.count + sample_count
-    ratio = sample_count / total_count
+    ratio = sample_count / jnp.maximum(total_count, 1.0)
     mean = state.mean + delta * ratio
     previous_moment = state.variance * (state.count + epsilon)
     sample_moment = sample_variance * sample_count
     combined_moment = previous_moment + sample_moment + jnp.square(delta) * state.count * ratio
-    variance = combined_moment / total_count
-    return RunningMomentsState(mean=mean, variance=variance, count=total_count)
+    variance = combined_moment / jnp.maximum(total_count, 1.0)
+    updated = RunningMomentsState(mean=mean, variance=variance, count=total_count)
+    return jax.tree.map(lambda new, old: jnp.where(sample_count > 0, new, old), updated, state)
 
 
 def update_reward_normalizer(
@@ -82,6 +87,7 @@ def update_reward_normalizer(
     *,
     discount: float,
     moments_epsilon: float = 1.0e-4,
+    valid: jax.Array | None = None,
 ) -> RewardNormalizerState:
     """Update once from one collected vector transition, including replay warm-up."""
     expected = state.discounted_return.shape
@@ -97,13 +103,16 @@ def update_reward_normalizer(
     if not math.isfinite(discount) or not 0.0 < discount <= 1.0:
         raise ValueError(f"discount must be finite and in (0, 1], got {discount}")
 
+    if valid is None:
+        valid = jnp.isfinite(reward)
     done = jnp.logical_or(terminated, truncated)
     discounted_return = discount * (~done).astype(jnp.float32) * state.discounted_return + reward
+    discounted_return = jnp.where(valid, discounted_return, 0.0)
     maximum_absolute_return = jnp.maximum(
         state.maximum_absolute_return,
         jnp.max(jnp.abs(discounted_return)),
     )
-    moments = update_running_moments(state.moments, discounted_return, moments_epsilon)
+    moments = update_running_moments(state.moments, discounted_return, moments_epsilon, valid=valid)
     return RewardNormalizerState(
         discounted_return=discounted_return,
         maximum_absolute_return=maximum_absolute_return,

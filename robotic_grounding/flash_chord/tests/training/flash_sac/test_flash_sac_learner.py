@@ -822,11 +822,10 @@ def test_nonfinite_critic_skips_only_adam_but_keeps_attempt_side_effects():
     )
     state, executables = _create(config, jnp)
     state, action = _first_action(state, executables)
-    state = state.replace(
-        target_critic=state.target_critic.replace(
-            params=jax.tree.map(jnp.zeros_like, state.target_critic.params),
-        )
-    )
+    target_params = jax.tree.map(jnp.zeros_like, state.target_critic.params)
+    # Corrupt target logits independently of collected data; training BN ignores running stats.
+    target_params["categorical_bias"] = jnp.full_like(target_params["categorical_bias"], jnp.nan)
+    state = state.replace(target_critic=state.target_critic.replace(params=target_params))
     critic_params = _tree_numpy(jax, state.critic.params)
     critic_optimizer = _tree_numpy(jax, state.critic.optimizer_state)
     actor_batch_stats = _tree_numpy(jax, state.actor.batch_stats)
@@ -836,7 +835,7 @@ def test_nonfinite_critic_skips_only_adam_but_keeps_attempt_side_effects():
     state, _, metrics = _consume(
         state,
         executables,
-        _transition(jnp, action, invalid_action=True),
+        _transition(jnp, action),
         jnp,
     )
 
@@ -858,7 +857,7 @@ def test_nonfinite_critic_skips_only_adam_but_keeps_attempt_side_effects():
         not np.array_equal(np.asarray(actual), before)
         for actual, before in zip(jax.tree.leaves(state.target_critic.batch_stats), target_batch_stats, strict=True)
     )
-    assert any(np.any(np.asarray(value) != 0.0) for value in jax.tree.leaves(state.target_critic.params))
+    assert np.any(np.asarray(state.target_critic.params["categorical"]["unit_kernel"]) != 0.0)
 
 
 def test_apply_adam_if_finite_preserves_parameters_and_moments_on_failure():
@@ -895,3 +894,41 @@ def test_compiled_transition_validation_rejects_shape():
 
     with pytest.raises(ValueError, match="transition action"):
         _consume(state, executables, transition, jnp)
+
+
+@pytest.mark.parametrize("failure", ["terminal", "action", "physics_only"])
+def test_nonfinite_transition_cannot_poison_training_and_counts_episode_once(failure):
+    jax, jnp = _dependencies()
+    state, executables = _create(_config(updates_per_collection=1.0), jnp)
+    state, action = _first_action(state, executables)
+    transition = _transition(jnp, action, step=1)
+    # World 0 already reports truncation: numerical failure must still count once.
+    if failure == "terminal":
+        transition = transition.replace(next_observation=transition.next_observation.at[0].set(jnp.nan))
+    elif failure == "action":
+        transition = transition.replace(action=action.at[0].set(jnp.nan))
+    else:
+        transition = transition.replace(valid=jnp.asarray([False, True]))
+    state, action, metrics = _consume(state, executables, transition, jnp, reset_logging=True)
+    assert int(state.replay.size) == 1
+    assert int(metrics.episode_count_total) == 1
+    assert int(metrics.nonfinite_episode_count_total) == 1
+    assert int(state.logging.nonfinite_episode_count) == 0
+    assert float(state.reward_normalizer.moments.count) == 1
+
+    for step in range(2, 5):
+        state, action, metrics = _consume(state, executables, _transition(jnp, action, step=step), jnp)
+    assert int(state.global_update_step) == 3
+    assert int(metrics.nonfinite_episode_count) == 0
+    assert int(metrics.nonfinite_episode_count_total) == 1
+    assert int(metrics.episode_count_total) == 3
+    for tree in (
+        state.actor,
+        state.critic,
+        state.target_critic,
+        state.temperature,
+        state.reward_normalizer,
+        state.replay.storage,
+        action,
+    ):
+        assert all(np.isfinite(np.asarray(x)).all() for x in jax.tree.leaves(tree))

@@ -201,3 +201,27 @@ def test_reward_normalizer_validates_shapes_and_float32_state():
         )
     with pytest.raises(TypeError, match="rewards must be float32"):
         normalize_rewards(state, jnp.ones((2,), dtype=jnp.float16), bound=5.0)
+
+
+def test_nonfinite_rewards_are_excluded_and_all_invalid_preserves_global_statistics():
+    jax, jnp = _dependencies()
+    from flash_chord.training.flash_sac.reward_normalization import (
+        create_reward_normalizer,
+        update_reward_normalizer,
+    )
+
+    update = jax.jit(
+        lambda state, rewards: update_reward_normalizer(
+            state, rewards, jnp.zeros(2, dtype=jnp.bool_), jnp.zeros(2, dtype=jnp.bool_), discount=0.9
+        )
+    )
+    state = update(create_reward_normalizer(2), jnp.asarray([2.0, jnp.nan], dtype=jnp.float32))
+    assert float(state.moments.count) == 1
+    assert float(state.moments.mean) == 2
+    np.testing.assert_array_equal(np.asarray(state.discounted_return), [2, 0])
+    before = state
+    state = update(state, jnp.asarray([jnp.nan, jnp.inf], dtype=jnp.float32))
+    for actual, expected in zip(jax.tree.leaves(state.moments), jax.tree.leaves(before.moments), strict=True):
+        np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+    assert float(state.maximum_absolute_return) == 2
+    np.testing.assert_array_equal(np.asarray(state.discounted_return), [0, 0])

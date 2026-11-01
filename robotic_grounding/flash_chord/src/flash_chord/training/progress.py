@@ -49,7 +49,13 @@ class ConsoleTrainingProgress:
             flush=True,
         )
 
-    def update(self, completed_environment_steps: int) -> None:
+    def update(
+        self,
+        completed_environment_steps: int,
+        *,
+        nonfinite_episodes=None,
+        completed_episodes=None,
+    ) -> None:
         """Print after crossing the next whole percent, and always at completion."""
         if self._start_time is None:
             raise RuntimeError("training progress must be started before it is updated")
@@ -71,10 +77,15 @@ class ConsoleTrainingProgress:
         rate = completed_since_start / elapsed_seconds if elapsed_seconds > 0.0 else 0.0
         remaining = self.total_environment_steps - completed_environment_steps
         eta = _format_duration(remaining / rate) if rate > 0.0 else "calculating"
+        episode_summary = ""
+        if nonfinite_episodes is not None and completed_episodes is not None:
+            failed, completed = int(nonfinite_episodes), int(completed_episodes)
+            fraction = f"{100 * failed / completed:.2f}%" if completed else "n/a"
+            episode_summary = f"; nonfinite episodes: {failed:,}/{completed:,} ({fraction})"
         print(
             f"training progress: {completed_environment_steps:,}/{self.total_environment_steps:,} "
             f"environment steps ({percent:.1f}%); {rate:,.0f} env steps/s; "
-            f"elapsed {_format_duration(elapsed_seconds)}; ETA {eta}",
+            f"elapsed {_format_duration(elapsed_seconds)}; ETA {eta}{episode_summary}",
             flush=True,
         )
         self._last_environment_steps = completed_environment_steps
