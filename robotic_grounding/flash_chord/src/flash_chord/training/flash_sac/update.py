@@ -67,13 +67,14 @@ def update_loss_scale(
     *,
     enabled: bool,
 ) -> LossScaleState:
-    """Match PyTorch GradScaler growth/backoff timing after one optimizer attempt."""
+    """Apply GradScaler growth/backoff with a positive finite scale bound."""
     if not enabled:
         return state
     next_finite_steps = state.finite_steps + 1
     grow = next_finite_steps >= config.loss_scale_growth_interval
     finite_scale = jnp.where(grow, state.scale * config.loss_scale_growth_factor, state.scale)
     scale = jnp.where(finite, finite_scale, state.scale * config.loss_scale_backoff_factor)
+    scale = jnp.clip(scale, config.loss_scale_min, jnp.finfo(jnp.float32).max)
     finite_steps = jnp.where(jnp.logical_or(~finite, grow), 0, next_finite_steps)
     return LossScaleState(scale=scale.astype(jnp.float32), finite_steps=finite_steps.astype(jnp.int32))
 

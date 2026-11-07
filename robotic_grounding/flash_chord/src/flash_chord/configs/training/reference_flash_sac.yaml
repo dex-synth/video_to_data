@@ -34,6 +34,7 @@ network:
   batch_norm_epsilon: 0.00001
   rms_norm_epsilon: 0.000001
   projection_epsilon: 0.00000001
+  normalized_feature_limit: null
 
 optimization:
   _target_: flash_chord.training.flash_sac.config.OptimizationConfig
@@ -47,9 +48,11 @@ optimization:
   adam_beta2: 0.999
   adam_epsilon: 0.00000001
   loss_scale_initial: 65536.0
+  loss_scale_min: 1.0
   loss_scale_growth_factor: 2.0
   loss_scale_backoff_factor: 0.5
   loss_scale_growth_interval: 2000
+  max_failed_updates: 1024
   actor_update_period: 2
   actor_learning_rate_multiplier: 1.0
   residual_mean_learning_rate_multiplier: 1.0

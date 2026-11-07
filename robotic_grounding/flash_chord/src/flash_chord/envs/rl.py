@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
 import warp as wp
 
 from flash_chord.data.reference import Reference
@@ -17,6 +18,7 @@ from flash_chord.envs.observation import (
     ObservationSpec,
     PolicyObservationConfig,
 )
+from flash_chord.envs.validity import StateValidity, StateValidityConfig
 from flash_chord.lifecycle.reset import (
     RESET_CONTEXT_NAMES,
     FirstFrameResetCurriculum,
@@ -50,6 +52,7 @@ class RLEnvConfig(BaseEnvConfig):
     auto_reset: bool = True
     capture_terminal_state: bool = False
     critic_context: CriticContextConfig = field(default_factory=CriticContextConfig)
+    state_validity: StateValidityConfig | None = None
 
 
 _OBJECT_BODY_VELOCITY_NAMES = (
@@ -129,9 +132,8 @@ def check_transition_finite(
     observation_dim: int,
     context_dim: int,
     term_count: int,
+    invalid_reason: wp.array(dtype=wp.int32),
     score: wp.array(dtype=wp.float32),
-    terminated: wp.array(dtype=wp.int32),
-    valid: wp.array(dtype=wp.int32),
 ) -> None:
     """Detect numerical failure before auto-reset can hide a corrupt terminal state."""
     w = wp.tid()
@@ -158,10 +160,22 @@ def check_transition_finite(
         finite = finite and wp.isfinite(context[w * context_dim + i])
     for i in range(term_count):
         finite = finite and wp.isfinite(terms[w * term_count + i])
-    valid[w] = int(finite)
     if not finite:
-        terminated[w] = 1
-        score[w] = 0.0
+        invalid_reason[w] = invalid_reason[w] | 1
+
+
+@wp.kernel
+def terminate_invalid_states(
+    reason: wp.array(dtype=wp.int32),
+    score: wp.array(dtype=wp.float32),
+    terminated: wp.array(dtype=wp.int32),
+    valid: wp.array(dtype=wp.int32),
+):
+    world = wp.tid()
+    valid[world] = int(reason[world] == 0)
+    if valid[world] == 0:
+        score[world] = 0.0
+        terminated[world] = 1
 
 
 @wp.kernel
@@ -368,6 +382,12 @@ class RLEnv(BaseEnv):
         self.truncation = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
         self.reset_mask = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
         self.transition_valid = wp.ones(self.world_count, dtype=wp.int32, device=self.device)
+        self.transition_invalid_reason = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
+        self.reset_invalid_reason = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
+        self.state_validity = (
+            StateValidity(self.model, self.world_count, config.state_validity, self.device)
+            if config.state_validity is not None else None
+        )
         self.running_return = wp.zeros(self.world_count, dtype=wp.float32, device=self.device)
         self.running_length = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
         self.episode_return = wp.zeros(self.world_count, dtype=wp.float32, device=self.device)
@@ -437,10 +457,18 @@ class RLEnv(BaseEnv):
         observation = self.observation_strategy.compute(self.state_0)
         if self.config.capture_terminal_state:
             self._compute_critic_context(self.state_0, self.critic_context)
+        if self.state_validity is not None:
+            self.state_validity.check(self.state_0, self.reset_invalid_reason)
+            bad = (selected.numpy() != 0) & (self.reset_invalid_reason.numpy() != 0)
+            if bad.any():
+                raise RuntimeError(f"Invalid physical state after reset in worlds {np.flatnonzero(bad).tolist()}")
         return observation
 
     def _rl_step(self) -> None:
         self._transition()
+        self.transition_invalid_reason.zero_()
+        if self.state_validity is not None:
+            self.state_validity.check(self.state_0, self.transition_invalid_reason)
         if self.config.capture_terminal_state:
             self.observation_strategy.compute_into(self.state_0, self.terminal_observation)
             self._compute_critic_context(self.state_0, self.terminal_critic_context)
@@ -464,11 +492,15 @@ class RLEnv(BaseEnv):
                     self.observation_dim,
                     len(self.critic_context_names),
                     terms.shape[0] // self.world_count,
+                    self.transition_invalid_reason,
                     self.objective.score,
-                    self.terminated,
                 ],
-                outputs=[self.transition_valid],
             )
+        wp.launch(
+            terminate_invalid_states, dim=self.world_count,
+            inputs=[self.transition_invalid_reason, self.objective.score, self.terminated],
+            outputs=[self.transition_valid],
+        )
         wp.launch(
             publish_rl_transition,
             dim=self.world_count,
@@ -505,6 +537,8 @@ class RLEnv(BaseEnv):
         self.observation_strategy.compute(self.state_0)
         if self.config.capture_terminal_state:
             self._compute_critic_context(self.state_0, self.critic_context)
+        if self.state_validity is not None:
+            self.state_validity.check(self.state_0, self.reset_invalid_reason)
 
     def _advance_lifecycle(self) -> None:
         """Advance the reference reset hold, per-world VOC, and reference counters."""

@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import flax
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from flash_chord.training.checkpoint import (
     load_checkpoint,
@@ -99,6 +100,15 @@ def _metadata(metadata: Mapping[str, object] | None, kind: str) -> dict[str, obj
     return result
 
 
+def validate_checkpoint_state(state) -> None:
+    """Reject corrupt inference/learner state before publishing usable artifacts."""
+    for path, value in jax.tree_util.tree_flatten_with_path(state)[0]:
+        if not np.isfinite(np.asarray(value)).all():
+            raise FloatingPointError(f"Non-finite checkpoint state: {jax.tree_util.keystr(path)}")
+    if isinstance(state, TrainingCheckpoint) and float(state.loss_scale.scale) <= 0:
+        raise FloatingPointError("Checkpoint loss scale must be positive")
+
+
 def save_actor_checkpoint(
     path: str | Path,
     actor: ActorInferenceState,
@@ -107,6 +117,7 @@ def save_actor_checkpoint(
 ) -> Path:
     """Save one deployable actor-only checkpoint with standard FlashSAC metadata."""
     path = Path(path)
+    validate_checkpoint_state(actor)
     save_checkpoint(path, actor, metadata=_metadata(metadata, "policy"))
     return path
 
@@ -119,6 +130,7 @@ def save_learner_checkpoint(
     save_replay: bool = False,
 ) -> CheckpointPaths:
     """Save policy and compact state, with replay in a separate explicitly requested file."""
+    validate_checkpoint_state(training_checkpoint(learner))
     directory = Path(directory)
     step = int(jax.device_get(learner.environment_steps))
     policy_path = directory / f"policy_{step}.safetensors"

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections.abc import Mapping
@@ -17,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from flash_chord.lifecycle.curriculum import CurriculumStage
-from flash_chord.training.checkpoint import read_checkpoint_metadata
+from flash_chord.training.checkpoint import read_checkpoint_metadata, save_checkpoint
 from flash_chord.training.checkpoint_metadata import (
     checkpoint_critic_schema,
     checkpoint_policy_schema,
@@ -30,6 +31,7 @@ from flash_chord.training.flash_sac.checkpoint import (
     CheckpointPaths,
     restore_learner_checkpoint,
     save_learner_checkpoint,
+    training_checkpoint,
 )
 from flash_chord.training.flash_sac.config import TrainingConfig
 from flash_chord.training.flash_sac.learner import (
@@ -40,9 +42,33 @@ from flash_chord.training.flash_sac.learner import (
     create_learner,
     reset_context_indices,
 )
+from flash_chord.training.flash_sac.update import gradients_are_finite
 from flash_chord.training.progress import ConsoleTrainingProgress, TrainingProgress
 
 _DEVICE_PATTERN = re.compile(r"^(cuda|gpu|cpu)(?::([0-9]+))?$")
+
+
+@jax.jit
+def _training_health(learner):
+    return {
+        "finite": gradients_are_finite(training_checkpoint(learner)),
+        "loss_scale": learner.loss_scale.scale,
+        "actor_updates": learner.actor.optimizer_state.count,
+        "critic_updates": learner.critic.optimizer_state.count,
+        "attempts": learner.global_update_step,
+    }
+
+
+def _stop_unhealthy_training(learner, reason, checkpoint_dir, metadata):
+    if checkpoint_dir is not None:
+        directory = Path(checkpoint_dir) / "failure"
+        directory.mkdir(parents=True, exist_ok=True)
+        # Preserve the corrupt/stalled state for diagnosis, never as a policy.
+        save_checkpoint(directory / "state.safetensors", training_checkpoint(learner), metadata=metadata)
+        (directory / "reason.json").write_text(json.dumps({
+            "reason": reason, "environment_steps": int(learner.environment_steps),
+        }, indent=2) + "\n")
+    raise FloatingPointError(reason)
 
 
 def resolve_jax_device(name: str) -> jax.Device:
@@ -104,6 +130,7 @@ def _compile_executables(
         post_reset_observation=jnp.zeros_like(learner.observation),
         post_reset_critic_context=jnp.zeros_like(learner.critic_context),
         valid=jax.device_put(np.ones(world_count, dtype=np.bool_), device),
+        post_reset_valid=jax.device_put(np.ones(world_count, dtype=np.bool_), device),
     )
     consume_transition = executables.consume_transition.lower(
         learner,
@@ -231,10 +258,10 @@ class WandbLogger:
 def metric_definitions(env: WarpRLEnv) -> dict[str, str]:
     """Return exact aggregation semantics stored with each FlashSAC W&B run."""
     definitions = {
-        "episode/nonfinite_fraction_per_completed_episode": (
+        "episode/invalid_fraction_per_completed_episode": (
             "Fraction of completed episodes with numerical failure since the previous log."
         ),
-        "episode/nonfinite_episode_rate": (
+        "episode/invalid_episode_rate": (
             "Numerically failed episodes / all completed episodes since this training invocation; "
             "failed episodes are included in the denominator and counted once."
         ),
@@ -328,11 +355,11 @@ def metrics_to_host(
     episode_count = float(np.asarray(learner.episode_count))
     denominator = max(episode_count, 1.0)
     reference_end_count = float(np.asarray(learner.reference_end_count))
-    nonfinite_count = float(np.asarray(learner.nonfinite_episode_count))
+    invalid_count = float(np.asarray(learner.invalid_episode_count))
     replay_size = float(np.asarray(learner.replay_size))
     output = {
-        "episode/nonfinite_fraction_per_completed_episode": nonfinite_count / denominator,
-        "episode/nonfinite_episode_rate": float(np.asarray(learner.nonfinite_episode_count_total))
+        "episode/invalid_fraction_per_completed_episode": invalid_count / denominator,
+        "episode/invalid_episode_rate": float(np.asarray(learner.invalid_episode_count_total))
         / max(float(np.asarray(learner.episode_count_total)), 1.0),
         "reward/total_mean_per_env_step": float(np.asarray(learner.reward_mean_per_env_step)),
         "episode/return_mean_per_completed_episode": float(
@@ -386,7 +413,7 @@ def metrics_to_host(
         )
     for name, count in zip(termination_cause_names, cause_counts, strict=True):
         output[f"termination/{name}_fraction_per_completed_episode"] = float(count) / denominator
-    classified_count = reference_end_count + float(cause_counts.sum()) + nonfinite_count
+    classified_count = reference_end_count + float(cause_counts.sum()) + invalid_count
     if not np.isclose(classified_count, episode_count):
         raise ValueError(
             f"exclusive outcome counts sum to {classified_count}; expected completed episode count {episode_count}"
@@ -498,6 +525,11 @@ def _run_training(
         )
 
     environment_steps = int(jax.device_get(learner.environment_steps))
+    health = {k: np.asarray(v).item() for k, v in _training_health(learner).items()}
+    if not health["finite"] or health["loss_scale"] <= 0:
+        _stop_unhealthy_training(learner, "Invalid initial learner state", checkpoint_dir, checkpoint_metadata)
+    last_counts = {name: health[name] for name in ("actor_updates", "critic_updates")}
+    last_progress = dict.fromkeys(last_counts, health["attempts"])
     if environment_steps > config.total_environment_steps:
         raise ValueError(
             f"checkpoint has {environment_steps} environment steps; budget is {config.total_environment_steps}"
@@ -595,6 +627,10 @@ def _run_training(
                     if step.transition_valid is not None
                     else jnp.ones(config.world_count, dtype=jnp.bool_)
                 ),
+                post_reset_valid=(
+                    step.post_reset_valid if step.post_reset_valid is not None
+                    else jnp.ones(config.world_count, dtype=jnp.bool_)
+                ),
             ),
             objective_weights,
             frame_dt,
@@ -605,11 +641,26 @@ def _run_training(
         environment_steps = next_environment_steps
         steps_since_log += config.world_count
         collection_index = next_collection_index
+        if logging_boundary:
+            health = {k: np.asarray(v).item() for k, v in _training_health(learner).items()}
+            if not health["finite"] or health["loss_scale"] <= 0:
+                _stop_unhealthy_training(
+                    learner, "Non-finite learner state or invalid loss scale", checkpoint_dir, checkpoint_metadata,
+                )
+            for name, period in (("actor_updates", config.optimization.actor_update_period), ("critic_updates", 1)):
+                if health[name] > last_counts[name]:
+                    last_progress[name] = health["attempts"]
+                last_counts[name] = health[name]
+                if health["attempts"] - last_progress[name] >= config.optimization.max_failed_updates * period:
+                    _stop_unhealthy_training(
+                        learner, f"No successful {name} for repeated optimizer attempts",
+                        checkpoint_dir, checkpoint_metadata,
+                    )
         if progress is not None:
             if isinstance(progress, ConsoleTrainingProgress):
                 progress.update(
                     environment_steps,
-                    nonfinite_episodes=learner_metrics.nonfinite_episode_count_total,
+                    invalid_episodes=learner_metrics.invalid_episode_count_total,
                     completed_episodes=learner_metrics.episode_count_total,
                 )
             else:

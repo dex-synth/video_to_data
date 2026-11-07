@@ -252,6 +252,11 @@ def test_shared_loss_scale_matches_pytorch_growth_and_backoff_timing():
     assert float(state.scale) == 8.0
     assert int(state.finite_steps) == 0
 
+    state = advance(state, jnp.zeros(2048, dtype=jnp.bool_))
+    assert float(state.scale) == config.loss_scale_min
+    state = advance(state, jnp.ones(3, dtype=jnp.bool_))
+    assert float(state.scale) == 2 * config.loss_scale_min
+
     inert = create_loss_scale(config, enabled=False)
     inert = update_loss_scale(inert, jnp.asarray(False), config, enabled=False)
     assert float(inert.scale) == 1.0

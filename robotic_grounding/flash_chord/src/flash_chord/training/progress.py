@@ -53,7 +53,7 @@ class ConsoleTrainingProgress:
         self,
         completed_environment_steps: int,
         *,
-        nonfinite_episodes=None,
+        invalid_episodes=None,
         completed_episodes=None,
     ) -> None:
         """Print after crossing the next whole percent, and always at completion."""
@@ -78,10 +78,10 @@ class ConsoleTrainingProgress:
         remaining = self.total_environment_steps - completed_environment_steps
         eta = _format_duration(remaining / rate) if rate > 0.0 else "calculating"
         episode_summary = ""
-        if nonfinite_episodes is not None and completed_episodes is not None:
-            failed, completed = int(nonfinite_episodes), int(completed_episodes)
+        if invalid_episodes is not None and completed_episodes is not None:
+            failed, completed = int(invalid_episodes), int(completed_episodes)
             fraction = f"{100 * failed / completed:.2f}%" if completed else "n/a"
-            episode_summary = f"; nonfinite episodes: {failed:,}/{completed:,} ({fraction})"
+            episode_summary = f"; invalid episodes: {failed:,}/{completed:,} ({fraction})"
         print(
             f"training progress: {completed_environment_steps:,}/{self.total_environment_steps:,} "
             f"environment steps ({percent:.1f}%); {rate:,.0f} env steps/s; "

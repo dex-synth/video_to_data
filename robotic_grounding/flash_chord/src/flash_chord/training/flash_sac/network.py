@@ -116,6 +116,7 @@ class UnitBatchNorm(nn.Module):
     update_rate: float = 0.01
     epsilon: float = 1.0e-5
     dtype: Any = jnp.float32
+    feature_limit: float | None = None
 
     @nn.compact
     def __call__(self, value: jax.Array, *, training: bool) -> jax.Array:
@@ -147,7 +148,10 @@ class UnitBatchNorm(nn.Module):
             mean = running_mean.value
             variance = running_variance.value
         normalized = (value_f32 - mean) * jax.lax.rsqrt(variance + self.epsilon)
-        return normalized * scale + bias
+        value = normalized * scale + bias
+        if self.feature_limit is not None:
+            value = jnp.clip(value, -self.feature_limit, self.feature_limit)
+        return value
 
 
 class EnsembleUnitBatchNorm(nn.Module):
@@ -157,6 +161,7 @@ class EnsembleUnitBatchNorm(nn.Module):
     update_rate: float = 0.01
     epsilon: float = 1.0e-5
     dtype: Any = jnp.float32
+    feature_limit: float | None = None
 
     @nn.compact
     def __call__(self, value: jax.Array, *, training: bool) -> jax.Array:
@@ -191,7 +196,10 @@ class EnsembleUnitBatchNorm(nn.Module):
             mean = running_mean.value
             variance = running_variance.value
         normalized = (value_f32 - mean[:, None, :]) * jax.lax.rsqrt(variance[:, None, :] + self.epsilon)
-        return normalized * scale[:, None, :] + bias[:, None, :]
+        value = normalized * scale[:, None, :] + bias[:, None, :]
+        if self.feature_limit is not None:
+            value = jnp.clip(value, -self.feature_limit, self.feature_limit)
+        return value
 
 
 class UnitRMSNorm(nn.Module):
@@ -246,6 +254,7 @@ class Block(nn.Module):
             self.config.batch_norm_update_rate,
             self.config.batch_norm_epsilon,
             self.dtype,
+            feature_limit=self.config.normalized_feature_limit,
             name="expand_norm",
         )(value, training=training)
         value = nn.relu(value)
@@ -254,6 +263,7 @@ class Block(nn.Module):
             self.config.batch_norm_update_rate,
             self.config.batch_norm_epsilon,
             self.dtype,
+            feature_limit=self.config.normalized_feature_limit,
             name="contract_norm",
         )(value, training=training)
         return nn.relu(value) + residual
@@ -279,6 +289,7 @@ class EnsembleBlock(nn.Module):
             self.config.batch_norm_update_rate,
             self.config.batch_norm_epsilon,
             self.dtype,
+            feature_limit=self.config.normalized_feature_limit,
             name="expand_norm",
         )(value, training=training)
         value = nn.relu(value)
@@ -293,6 +304,7 @@ class EnsembleBlock(nn.Module):
             self.config.batch_norm_update_rate,
             self.config.batch_norm_epsilon,
             self.dtype,
+            feature_limit=self.config.normalized_feature_limit,
             name="contract_norm",
         )(value, training=training)
         return nn.relu(value) + residual
@@ -311,6 +323,7 @@ class Actor(nn.Module):
             self.config.batch_norm_update_rate,
             self.config.batch_norm_epsilon,
             self.dtype,
+            feature_limit=self.config.normalized_feature_limit,
             name="input_norm",
         )(observation, training=training)
         value = UnitLinear(self.config.actor_hidden_dim, self.dtype, name="embed")(value)
@@ -390,6 +403,7 @@ class Critic(nn.Module):
             self.config.batch_norm_update_rate,
             self.config.batch_norm_epsilon,
             self.dtype,
+            feature_limit=self.config.normalized_feature_limit,
             name="input_norm",
         )(value, training=training)
         value = EnsembleUnitLinear(

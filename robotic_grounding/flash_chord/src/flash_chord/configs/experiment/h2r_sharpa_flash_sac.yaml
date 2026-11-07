@@ -40,12 +40,21 @@ action:
   normalized_mapping: rational
 reset:
   skip_first_frame_settling: true
+env:
+  state_validity:
+    _target_: flash_chord.envs.validity.StateValidityConfig
+    max_body_displacement_m: 10.0
+    max_linear_speed_m_s: 20.0
+    max_angular_speed_rad_s: 200.0
+    joint_range_margin_fraction: 0.5
 training:
   total_environment_steps: 250003456
   updates_per_collection: 8.0
   resume: false
   checkpoint_path: null
   network:
+    # Shared by training and checkpoint-driven inference, after each BatchNorm.
+    normalized_feature_limit: 100.0
     actor_hidden_dim: 256
     critic_hidden_dim: 512
     initial_normalized_std: 0.1

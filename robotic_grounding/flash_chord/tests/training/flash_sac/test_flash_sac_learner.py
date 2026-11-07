@@ -803,61 +803,43 @@ def test_policy_warmup_remains_policy_driven_after_stage_clear_below_minimum():
     )
 
 
-def test_nonfinite_critic_skips_only_adam_but_keeps_attempt_side_effects():
+def test_failed_candidate_rolls_back_complete_update_and_recovers(monkeypatch):
     jax, jnp = _dependencies()
-
+    from flash_chord.training.flash_sac import learner as module
     from flash_chord.training.flash_sac.config import OptimizationConfig
 
-    optimization = OptimizationConfig(
-        loss_scale_initial=8.0,
-        loss_scale_growth_factor=2.0,
-        loss_scale_backoff_factor=0.5,
-        loss_scale_growth_interval=2,
-    )
-    config = _config(
-        updates_per_collection=1.0,
-        mixed_precision=True,
-        reward_normalization=False,
-        optimization=optimization,
-    )
+    config = _config(updates_per_collection=1.0, mixed_precision=True,
+                     reward_normalization=False,
+                     optimization=OptimizationConfig(loss_scale_initial=8.0))
     state, executables = _create(config, jnp)
     state, action = _first_action(state, executables)
-    target_params = jax.tree.map(jnp.zeros_like, state.target_critic.params)
-    # Corrupt target logits independently of collected data; training BN ignores running stats.
-    target_params["categorical_bias"] = jnp.full_like(target_params["categorical_bias"], jnp.nan)
-    state = state.replace(target_critic=state.target_critic.replace(params=target_params))
-    critic_params = _tree_numpy(jax, state.critic.params)
-    critic_optimizer = _tree_numpy(jax, state.critic.optimizer_state)
-    actor_batch_stats = _tree_numpy(jax, state.actor.batch_stats)
-    target_batch_stats = _tree_numpy(jax, state.target_critic.batch_stats)
-    temperature = float(jnp.exp(state.temperature.log_temperature))
+    before = {name: _tree_numpy(jax, getattr(state, name))
+              for name in ("actor", "critic", "target_critic", "temperature")}
+    original = module._critic_update
 
-    state, _, metrics = _consume(
-        state,
-        executables,
-        _transition(jnp, action),
-        jnp,
-    )
+    def corrupt_candidate(*args, **kwargs):
+        candidate, metrics, key = original(*args, **kwargs)
+        stats = jax.tree.map(lambda x: jnp.full_like(x, jnp.nan), candidate.critic.batch_stats)
+        return candidate.replace(critic=candidate.critic.replace(batch_stats=stats)), metrics, key
 
-    assert float(metrics.actor_skipped_fraction) == 0.0
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_critic_update", corrupt_candidate)
+        state, _, metrics = _consume(state, executables, _transition(jnp, action), jnp)
+    for name, expected in before.items():
+        _assert_tree_equal(jax, getattr(state, name), expected)
+    assert float(metrics.actor_skipped_fraction) == 1.0
     assert float(metrics.critic_skipped_fraction) == 1.0
-    _assert_tree_allclose(jax, state.critic.params, critic_params)
-    _assert_tree_equal(jax, state.critic.optimizer_state, critic_optimizer)
-    assert int(state.actor.schedule_step) == 1
-    assert int(state.temperature.schedule_step) == 1
-    assert int(state.critic.schedule_step) == 1
     assert float(state.loss_scale.scale) == 4.0
-    assert int(state.loss_scale.finite_steps) == 0
-    assert float(jnp.exp(state.temperature.log_temperature)) != temperature
-    assert any(
-        not np.array_equal(np.asarray(actual), before)
-        for actual, before in zip(jax.tree.leaves(state.actor.batch_stats), actor_batch_stats, strict=True)
-    )
-    assert any(
-        not np.array_equal(np.asarray(actual), before)
-        for actual, before in zip(jax.tree.leaves(state.target_critic.batch_stats), target_batch_stats, strict=True)
-    )
-    assert np.any(np.asarray(state.target_critic.params["categorical"]["unit_kernel"]) != 0.0)
+    assert int(state.global_update_step) == 1
+
+    # A fresh executable removes the fault injection while retaining the state.
+    _, healthy = _create(config, jnp)
+    for step in range(2, 8):
+        state, action, _ = _consume(state, healthy, _transition(jnp, action, step=step), jnp)
+    assert int(state.actor.optimizer_state.count) > 0
+    assert int(state.critic.optimizer_state.count) > 0
+    for name in before:
+        assert all(np.isfinite(np.asarray(x)).all() for x in jax.tree.leaves(getattr(state, name)))
 
 
 def test_apply_adam_if_finite_preserves_parameters_and_moments_on_failure():
@@ -908,19 +890,22 @@ def test_nonfinite_transition_cannot_poison_training_and_counts_episode_once(fai
     elif failure == "action":
         transition = transition.replace(action=action.at[0].set(jnp.nan))
     else:
-        transition = transition.replace(valid=jnp.asarray([False, True]))
+        transition = transition.replace(
+            next_observation=transition.next_observation.at[0].set(1.0e9),
+            valid=jnp.asarray([False, True]),
+        )
     state, action, metrics = _consume(state, executables, transition, jnp, reset_logging=True)
     assert int(state.replay.size) == 1
     assert int(metrics.episode_count_total) == 1
-    assert int(metrics.nonfinite_episode_count_total) == 1
-    assert int(state.logging.nonfinite_episode_count) == 0
+    assert int(metrics.invalid_episode_count_total) == 1
+    assert int(state.logging.invalid_episode_count) == 0
     assert float(state.reward_normalizer.moments.count) == 1
 
     for step in range(2, 5):
         state, action, metrics = _consume(state, executables, _transition(jnp, action, step=step), jnp)
     assert int(state.global_update_step) == 3
-    assert int(metrics.nonfinite_episode_count) == 0
-    assert int(metrics.nonfinite_episode_count_total) == 1
+    assert int(metrics.invalid_episode_count) == 0
+    assert int(metrics.invalid_episode_count_total) == 1
     assert int(metrics.episode_count_total) == 3
     for tree in (
         state.actor,
@@ -932,3 +917,12 @@ def test_nonfinite_transition_cannot_poison_training_and_counts_episode_once(fai
         action,
     ):
         assert all(np.isfinite(np.asarray(x)).all() for x in jax.tree.leaves(tree))
+
+
+def test_invalid_reset_stops_before_policy_inference():
+    jax, jnp = _dependencies()
+    state, executables = _create(_config(), jnp)
+    transition = _transition(jnp, jnp.zeros((2, 2), dtype=jnp.float32)).replace(
+        post_reset_valid=jnp.asarray([False, True]))
+    with pytest.raises(Exception, match="Invalid physical state"):
+        jax.block_until_ready(_consume(state, executables, transition, jnp))

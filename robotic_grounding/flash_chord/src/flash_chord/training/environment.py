@@ -34,6 +34,7 @@ class VectorStep:
     critic_context: jax.Array | None = None
     terminal_critic_context: jax.Array | None = None
     transition_valid: jax.Array | None = None
+    post_reset_valid: jax.Array | None = None
 
 
 @runtime_checkable
@@ -175,6 +176,7 @@ class WarpRLEnv:
                 (self.world_count, self.critic_context_dim),
             )
         transition_valid = getattr(self.env, "transition_valid", None)
+        reset_invalid_reason = getattr(self.env, "reset_invalid_reason", None)
         return VectorStep(
             observation=to_jax(observation, (self.world_count, self.observation_dim)),
             reward=reward,
@@ -190,6 +192,7 @@ class WarpRLEnv:
             critic_context=critic_context,
             terminal_critic_context=terminal_critic_context,
             transition_valid=None if transition_valid is None else to_jax(transition_valid).astype(jnp.bool_),
+            post_reset_valid=None if reset_invalid_reason is None else to_jax(reset_invalid_reason) == 0,
         )
 
     def transition_metrics(self) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:

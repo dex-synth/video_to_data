@@ -450,15 +450,16 @@ def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable(h2r_set
 
 @pytest.mark.slow
 @pytest.mark.parametrize("captured", [False, True])
-@pytest.mark.parametrize("failure", ["physics", "raw_action"])
+@pytest.mark.parametrize("failure", ["physics", "raw_action", "large_finite_velocity"])
 def test_nonfinite_world_is_reset_before_next_policy_observation(h2r_setup, h2r_config, captured, failure):
     import warp as wp
 
     with wp.ScopedDevice("cuda:0"):
         _, env = _build_h2r_rl_env(h2r_setup, h2r_config, "env.auto_reset=true")
         env.reset(frame_id=0)
-        inject = wp.array([[float("nan")] * 6], dtype=wp.spatial_vector)
-        if failure == "physics":
+        inject = wp.array([[1.0e9 if failure == "large_finite_velocity" else float("nan")] * 6],
+                          dtype=wp.spatial_vector)
+        if failure in ("physics", "large_finite_velocity"):
             transition = env._transition
 
             def corrupt_one_world():
@@ -479,7 +480,20 @@ def test_nonfinite_world_is_reset_before_next_policy_observation(h2r_setup, h2r_
         np.testing.assert_array_equal(env.transition_valid.numpy(), [0, 1])
         np.testing.assert_array_equal(env.reset_mask.numpy(), [1, 0])
         assert env.done.numpy()[0] == 1
+        np.testing.assert_array_equal(env.reset_invalid_reason.numpy(), [0, 0])
+        if failure == "large_finite_velocity":
+            assert env.transition_invalid_reason.numpy()[0] & 12 == 12
         assert np.isfinite(env.observation.numpy()).all()
         assert np.isfinite(env.critic_context.numpy()).all()
         for field in (env.state_0.joint_q, env.state_0.joint_qd, env.state_0.body_q, env.state_0.body_qd):
             assert np.isfinite(field.numpy()).all()
+
+
+@pytest.mark.slow
+def test_all_reference_frames_reset_within_numerical_bounds(h2r_setup, h2r_config):
+    import warp as wp
+    with wp.ScopedDevice("cuda:0"):
+        setup, env = _build_h2r_rl_env(h2r_setup, h2r_config)
+        for frame in range(setup.reference.num_frames):
+            env.reset(frame_id=frame)
+            assert not env.reset_invalid_reason.numpy().any()

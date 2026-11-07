@@ -136,9 +136,9 @@ class LoggingState:
     tracking_error_sum: jax.Array
     action_abs_sum: jax.Array
     optimizer: _MetricAccumulator
-    nonfinite_episode_count: jax.Array
+    invalid_episode_count: jax.Array
     episode_count_total: jax.Array
-    nonfinite_episode_count_total: jax.Array
+    invalid_episode_count_total: jax.Array
 
 
 @flax.struct.dataclass
@@ -177,6 +177,7 @@ class Transition:
     post_reset_observation: jax.Array
     post_reset_critic_context: jax.Array
     valid: jax.Array | None = None
+    post_reset_valid: jax.Array | None = None
 
 
 @flax.struct.dataclass
@@ -205,9 +206,9 @@ class LearnerMetrics:
     replay_size: jax.Array
     reward_scale_denominator: jax.Array
     loss_scale: jax.Array
-    nonfinite_episode_count: jax.Array
+    invalid_episode_count: jax.Array
     episode_count_total: jax.Array
-    nonfinite_episode_count_total: jax.Array
+    invalid_episode_count_total: jax.Array
 
 
 @dataclass(frozen=True)
@@ -318,9 +319,9 @@ def _zero_logging_state(
         tracking_error_sum=jnp.zeros(tracking_error_count, dtype=jnp.float32),
         action_abs_sum=jnp.zeros((), dtype=jnp.float32),
         optimizer=_zero_metrics(),
-        nonfinite_episode_count=jnp.zeros((), dtype=jnp.int32),
+        invalid_episode_count=jnp.zeros((), dtype=jnp.int32),
         episode_count_total=jnp.zeros((), dtype=jnp.int32),
-        nonfinite_episode_count_total=jnp.zeros((), dtype=jnp.int32),
+        invalid_episode_count_total=jnp.zeros((), dtype=jnp.int32),
     )
 
 
@@ -338,7 +339,7 @@ def reset_logging_window(state: LoggingState) -> LoggingState:
         tracking_error_sum=jnp.zeros_like(state.tracking_error_sum),
         action_abs_sum=jnp.zeros_like(state.action_abs_sum),
         optimizer=_zero_metrics(),
-        nonfinite_episode_count=jnp.zeros_like(state.nonfinite_episode_count),
+        invalid_episode_count=jnp.zeros_like(state.invalid_episode_count),
     )
 
 
@@ -398,9 +399,9 @@ def _accumulate_logging(
         tracking_error_sum=state.tracking_error_sum + tracking_errors.sum(axis=0),
         action_abs_sum=state.action_abs_sum + jnp.abs(transition.action).sum(),
         optimizer=_add_metrics(state.optimizer, optimizer_metrics),
-        nonfinite_episode_count=state.nonfinite_episode_count + (~transition.valid).sum(dtype=jnp.int32),
+        invalid_episode_count=state.invalid_episode_count + (~transition.valid).sum(dtype=jnp.int32),
         episode_count_total=state.episode_count_total + completed.sum(dtype=jnp.int32),
-        nonfinite_episode_count_total=state.nonfinite_episode_count_total + (~transition.valid).sum(dtype=jnp.int32),
+        invalid_episode_count_total=state.invalid_episode_count_total + (~transition.valid).sum(dtype=jnp.int32),
     )
 
 
@@ -481,9 +482,9 @@ def _finalize_metrics(
             bound=config.reward_normalization.normalized_return_bound,
         ),
         loss_scale=state.loss_scale.scale,
-        nonfinite_episode_count=logging.nonfinite_episode_count,
+        invalid_episode_count=logging.invalid_episode_count,
         episode_count_total=logging.episode_count_total,
-        nonfinite_episode_count_total=logging.nonfinite_episode_count_total,
+        invalid_episode_count_total=logging.invalid_episode_count_total,
     )
 
 
@@ -830,6 +831,7 @@ def _optimizer_attempt(
     config: TrainingConfig,
     loss_scaling: bool,
 ) -> tuple[LearnerState, _MetricAccumulator]:
+    previous, previous_metrics = state, metrics
     key, replay_key = jax.random.split(state.key)
     batch = _sample_replay(state.replay, replay_key)
     rewards = _relabel_rewards(batch, objective_weights, frame_dt)
@@ -876,6 +878,35 @@ def _optimizer_attempt(
         config,
         loss_scaling,
     )
+    # A finite gradient alone does not protect BatchNorm, target statistics,
+    # temperature, or Adam moments. Commit this entire attempt atomically.
+    accepted = gradients_are_finite((state.actor, state.critic, state.target_critic, state.temperature, metrics))
+    accepted = accepted & (metrics.actor_skips == previous_metrics.actor_skips)
+    accepted = accepted & (metrics.critic_skips == previous_metrics.critic_skips)
+
+    def reject(_):
+        actor_attempts = metrics.actor_attempts - previous_metrics.actor_attempts
+        critic_attempts = metrics.critic_attempts - previous_metrics.critic_attempts
+        rejected_metrics = previous_metrics.replace(
+            actor_attempts=metrics.actor_attempts,
+            actor_skips=previous_metrics.actor_skips + actor_attempts,
+            critic_attempts=metrics.critic_attempts,
+            critic_skips=previous_metrics.critic_skips + critic_attempts,
+        )
+        # Advance RNG and the attempt clock, so a rejected sample is not retried
+        # forever. Inference and optimizer state remains at the last commit.
+        rejected_state = state.replace(
+            actor=previous.actor,
+            critic=previous.critic,
+            target_critic=previous.target_critic,
+            temperature=previous.temperature,
+            loss_scale=update_loss_scale(
+                previous.loss_scale, jnp.asarray(False), config.optimization, enabled=loss_scaling,
+            ),
+        )
+        return rejected_state, rejected_metrics
+
+    state, metrics = jax.lax.cond(accepted, lambda _: (state, metrics), reject, operand=None)
     return state.replace(key=key), metrics
 
 
@@ -1064,13 +1095,15 @@ def create_learner(
 
         def reject_bad_reset():
             def fail():
-                raise RuntimeError("Non-finite observation or critic context after reset")
+                raise RuntimeError("Invalid physical state, observation or critic context after reset")
 
             jax.debug.callback(fail)
 
         reset_finite = jnp.all(jnp.isfinite(transition.post_reset_observation)) & jnp.all(
             jnp.isfinite(transition.post_reset_critic_context)
         )
+        if transition.post_reset_valid is not None:
+            reset_finite = reset_finite & jnp.all(transition.post_reset_valid)
         jax.lax.cond(reset_finite, lambda: None, reject_bad_reset)
         if frame_dt.shape != () or frame_dt.dtype != jnp.dtype(jnp.float32):
             raise TypeError(f"frame_dt must be a float32 scalar, got {frame_dt.shape}/{frame_dt.dtype}")

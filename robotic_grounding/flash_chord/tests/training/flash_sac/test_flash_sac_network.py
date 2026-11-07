@@ -542,3 +542,23 @@ def test_critic_matches_frozen_upstream_torch_oracle_in_eval_and_training():
     )
     for path, expected in oracle["critic_train_batch_stats"].items():
         np.testing.assert_allclose(_nested(state, path), expected, rtol=2.0e-5, atol=2.0e-6)
+
+
+def test_feature_limit_preserves_normal_inputs_and_bounds_fp16_inference():
+    from dataclasses import replace
+    jax, jnp = _dependencies()
+    from flash_chord.training.flash_sac.network import Actor
+
+    legacy = Actor(action_dim=2, config=_small_config(), dtype=jnp.float16)
+    bounded = Actor(action_dim=2, config=replace(_small_config(), normalized_feature_limit=100.0),
+                    dtype=jnp.float16)
+    normal = jnp.ones((2, 3), dtype=jnp.float32)
+    variables = legacy.init(jax.random.PRNGKey(42), normal, training=False)
+    for actual, expected in zip(jax.tree.leaves(bounded.apply(variables, normal, training=False)),
+                                jax.tree.leaves(legacy.apply(variables, normal, training=False)), strict=True):
+        np.testing.assert_array_equal(actual, expected)
+    extreme = normal.at[0].set(1e9)
+    output = jax.jit(lambda x: bounded.apply(variables, x, training=False))(extreme)
+    assert all(np.isfinite(np.asarray(x)).all() for x in jax.tree.leaves(output))
+    legacy_output = legacy.apply(variables, extreme, training=False)
+    assert any(not np.isfinite(np.asarray(x)).all() for x in jax.tree.leaves(legacy_output))

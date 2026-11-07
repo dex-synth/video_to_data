@@ -32,8 +32,13 @@ class NetworkConfig:
     batch_norm_epsilon: float = 1.0e-5
     rms_norm_epsilon: float = 1.0e-6
     projection_epsilon: float = 1.0e-8
+    normalized_feature_limit: float | None = None
 
     def __post_init__(self) -> None:
+        if self.normalized_feature_limit is not None and (
+            not math.isfinite(self.normalized_feature_limit) or self.normalized_feature_limit <= 0
+        ):
+            raise ValueError("normalized_feature_limit must be finite and positive or None")
         positive_counts = {
             "actor_blocks": self.actor_blocks,
             "actor_hidden_dim": self.actor_hidden_dim,
@@ -100,6 +105,7 @@ class OptimizationConfig:
     adam_beta2: float = 0.999
     adam_epsilon: float = 1.0e-8
     loss_scale_initial: float = 65_536.0
+    loss_scale_min: float = 1.0
     loss_scale_growth_factor: float = 2.0
     loss_scale_backoff_factor: float = 0.5
     loss_scale_growth_interval: int = 2_000
@@ -109,6 +115,7 @@ class OptimizationConfig:
     behavior_cloning_coefficient: float = 0.0
     target_tau: float = 0.01
     learning_rate_schedule_updates: int | None = None
+    max_failed_updates: int = 1024
 
     def __post_init__(self) -> None:
         learning_rates = (
@@ -138,6 +145,14 @@ class OptimizationConfig:
             raise ValueError(f"adam_epsilon must be finite and positive, got {self.adam_epsilon}")
         if not math.isfinite(self.loss_scale_initial) or self.loss_scale_initial <= 0.0:
             raise ValueError(f"loss_scale_initial must be finite and positive, got {self.loss_scale_initial}")
+        if not math.isfinite(self.loss_scale_min) or not 0 < self.loss_scale_min <= self.loss_scale_initial:
+            raise ValueError("loss_scale_min must be positive and no larger than loss_scale_initial")
+        if (
+            isinstance(self.max_failed_updates, bool)
+            or not isinstance(self.max_failed_updates, int)
+            or self.max_failed_updates <= 0
+        ):
+            raise ValueError("max_failed_updates must be a positive integer")
         if not math.isfinite(self.loss_scale_growth_factor) or self.loss_scale_growth_factor <= 1.0:
             raise ValueError(
                 f"loss_scale_growth_factor must be finite and greater than one, got {self.loss_scale_growth_factor}"

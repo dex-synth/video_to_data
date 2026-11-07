@@ -6,3 +6,4 @@
 !.gitignore
 !configuration.md
 !package_structure.md
+!numerical_stability.md

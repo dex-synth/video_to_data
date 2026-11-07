@@ -27,18 +27,19 @@ these parameters. A new configuration does not retroactively change a saved chec
 ## Numerical failures during training
 
 FlashSAC checks each terminal transition before auto-reset, including raw physics state and raw policy
-input actions (before clipping). A non-finite value ends and resets only the affected world. The invalid
-transition and every n-step window depending on it are excluded from replay; reward normalization also
+input actions (before clipping). A non-finite value or a configured physical-state bound violation ends
+and resets only the affected world. The invalid transition and every n-step window depending on it are excluded from replay; reward normalization also
 excludes the invalid step and clears that world's return accumulator. Completed earlier episodes keep
 their original termination/truncation and bootstrap semantics. Invalid rows are never training samples.
-A non-finite initial or post-reset observation/context stops training before the next policy inference.
+An invalid reset state or non-finite initial/post-reset observation/context stops training before the next policy inference.
 
-`episode/nonfinite_episode_rate` is the cumulative number of numerically failed episodes divided by all
+`episode/invalid_episode_rate` is the cumulative number of numerically failed episodes divided by all
 completed episodes, including numerical failures, since the current training invocation. Each failed
 episode counts once even if it also reaches an ordinary termination or reference end. The window metric
-is `episode/nonfinite_fraction_per_completed_episode`. Console progress shows the cumulative numerator,
+is `episode/invalid_fraction_per_completed_episode`. Console progress shows the cumulative numerator,
 denominator and percentage even with external logging disabled. These counters restart on resume.
-This protects healthy training from environment failures; it does not repair an already corrupted policy.
+The H2R recipe also bounds normalized features and rolls back failed optimizer attempts atomically.
+See [numerical stability](numerical_stability.md) for thresholds, diagnostics and failure handling.
 
 ## Checkpoints
 

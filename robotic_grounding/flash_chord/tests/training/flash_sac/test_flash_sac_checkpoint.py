@@ -254,3 +254,22 @@ def test_resume_rejects_replay_from_another_checkpoint_set(tmp_path):
             _learner(jnp),
             replay_path=second.replay,
         )
+
+
+@pytest.mark.parametrize("failure", ["critic_stats", "optimizer", "zero_scale"])
+def test_invalid_learner_cannot_publish_finite_actor(tmp_path, failure):
+    jax, jnp = _dependencies()
+    from flash_chord.training.flash_sac.checkpoint import save_learner_checkpoint
+    learner = _learner(jnp)
+    if failure == "critic_stats":
+        stats = jax.tree.map(lambda x: jnp.full_like(x, jnp.nan), learner.critic.batch_stats)
+        learner = learner.replace(critic=learner.critic.replace(batch_stats=stats))
+    elif failure == "optimizer":
+        optimizer = learner.critic.optimizer_state._replace(
+            mu=jax.tree.map(lambda x: jnp.full_like(x, jnp.inf), learner.critic.optimizer_state.mu))
+        learner = learner.replace(critic=learner.critic.replace(optimizer_state=optimizer))
+    else:
+        learner = learner.replace(loss_scale=learner.loss_scale.replace(scale=jnp.asarray(0.0)))
+    with pytest.raises(FloatingPointError):
+        save_learner_checkpoint(tmp_path, learner)
+    assert not list(tmp_path.glob("*.safetensors"))

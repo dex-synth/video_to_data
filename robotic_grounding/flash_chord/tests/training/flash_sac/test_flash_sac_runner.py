@@ -617,10 +617,30 @@ def test_runner_logs_numerical_failures_as_exclusive_episode_outcome():
 
     logger = _Logger()
     learner = run_training(NonfiniteEnv(jnp), _config(), logger=logger, log_interval=2)
-    assert int(learner.logging.nonfinite_episode_count_total) == 1
+    assert int(learner.logging.invalid_episode_count_total) == 1
     assert int(learner.logging.episode_count_total) == 2
     final = logger.records[-1][1]
-    assert final["episode/nonfinite_episode_rate"] == 0.5
+    assert final["episode/invalid_episode_rate"] == 0.5
     assert final["termination/reference_end_fraction_per_completed_episode"] == 0.0
     assert all(np.isfinite(value) for _, metrics in logger.records for value in metrics.values())
     assert all(np.isfinite(np.asarray(x)).all() for x in jax.tree.leaves(learner.actor))
+
+
+def test_runner_stops_stalled_optimizer_and_saves_diagnostic(tmp_path, monkeypatch):
+    _, jnp = _dependencies()
+    from flash_chord.training.flash_sac import learner as module, runner
+    original = module._critic_update
+
+    def fail_update(*args, **kwargs):
+        state, metrics, key = original(*args, **kwargs)
+        return state, metrics.replace(critic_skips=metrics.critic_skips + 1), key
+
+    monkeypatch.setattr(module, "_critic_update", fail_update)
+    config = _config()
+    config = replace(config, optimization=replace(config.optimization, max_failed_updates=2))
+    with pytest.raises(FloatingPointError, match="No successful critic_updates"):
+        runner.run_training(_Env(jnp), config, checkpoint_dir=tmp_path,
+                            checkpoint_metadata=_checkpoint_metadata(), log_interval=1)
+    reason = json.loads((tmp_path / "failure/reason.json").read_text())
+    assert reason["environment_steps"] == 4
+    assert (tmp_path / "failure/state.safetensors").is_file()

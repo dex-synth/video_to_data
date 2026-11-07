@@ -83,6 +83,8 @@ def test_entropy_target_is_derived_from_action_dimension_and_sigma():
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
+        ({"normalized_feature_limit": 0}, "normalized_feature_limit"),
+        ({"normalized_feature_limit": math.inf}, "normalized_feature_limit"),
         ({"actor_blocks": 0}, "dimensions and block counts"),
         ({"critic_hidden_dim": 0}, "dimensions and block counts"),
         ({"critic_count": 3}, "exactly two critics"),

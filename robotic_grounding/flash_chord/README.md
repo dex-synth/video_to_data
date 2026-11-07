@@ -85,6 +85,9 @@ Method-specific IK, contacts, FlashSAC, rewards and VOC training curriculum rema
 
 ## Train
 
+The H2R recipe enables [numerical stability checks](docs/numerical_stability.md) for physical states,
+network features, and complete learner updates.
+
 ```bash
 # Set PREPARED to the directory produced by flash_chord.h2r.prepare.
 python scripts/train_flash_sac.py \
