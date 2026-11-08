@@ -459,10 +459,18 @@ class RLEnv(BaseEnv):
             self._compute_critic_context(self.state_0, self.critic_context)
         if self.state_validity is not None:
             self.state_validity.check(self.state_0, self.reset_invalid_reason)
-            bad = (selected.numpy() != 0) & (self.reset_invalid_reason.numpy() != 0)
-            if bad.any():
-                raise RuntimeError(f"Invalid physical state after reset in worlds {np.flatnonzero(bad).tolist()}")
+            if not self.device.is_cuda or not wp.get_stream(self.device).is_capturing:
+                self.check_reset_validity(selected)
         return observation
+
+    def check_reset_validity(self, reset_mask: wp.array | None = None) -> None:
+        """Report reset failures on the host; call after replaying a captured reset."""
+        if self.state_validity is None:
+            return
+        selected = self.reset_table.all_reset_mask if reset_mask is None else reset_mask
+        bad = (selected.numpy() != 0) & (self.reset_invalid_reason.numpy() != 0)
+        if bad.any():
+            raise RuntimeError(f"Invalid physical state after reset in worlds {np.flatnonzero(bad).tolist()}")
 
     def _rl_step(self) -> None:
         self._transition()

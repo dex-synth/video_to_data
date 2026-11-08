@@ -164,6 +164,7 @@ def load_mano_sharpa(
     motion_speed: float = 1.0,
     *,
     object_assets: tuple[ObjectAssetSpec, ...] | None = None,
+    sample_times_s: np.ndarray | None = None,
 ) -> ManoSharpaReference:
     """Load a ManoSharpa parquet and optionally resample it for control-rate playback.
 
@@ -242,6 +243,16 @@ def load_mano_sharpa(
         _playback_times(num_frames, src_fps, control_fps, motion_speed) if control_fps is not None else (None, None)
     )
     resample = control_fps is not None and (control_fps != src_fps or motion_speed != 1.0)
+    if sample_times_s is not None:
+        # A fixed benchmark endpoint may fall between control frames. The caller
+        # supplies that boundary; interpolation remains the native loader's.
+        t_src = np.arange(num_frames, dtype=np.float64) / src_fps
+        t_tgt = np.asarray(sample_times_s, dtype=np.float64)
+        if (control_fps is None or motion_speed != 1.0 or t_tgt.ndim != 1 or len(t_tgt) < 2
+                or not np.isfinite(t_tgt).all() or t_tgt[0] != 0 or t_tgt[-1] > t_src[-1]
+                or np.any(np.diff(t_tgt) <= 0)):
+            raise ValueError("Explicit reference samples must increase within the 1x source window")
+        resample = True
 
     def lerp(a):
         return _lerp(a, t_src, t_tgt) if resample and a is not None else a

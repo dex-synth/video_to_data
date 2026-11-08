@@ -2,16 +2,20 @@
 
 `flash_chord.h2r` 消费 h2r 的 human／scene bundle 与 `virtual_wrist_sharpa_wave_bimanual` robot bundle，在方法侧生成原生 MANO 特征、接触、Sharpa IK 和 FlashCHORD 参考。Bench 无需安装本方法的训练依赖。
 
-本 fork 只保留这条共同机器人上的训练配方，`scripts/train_flash_sac.py` 默认选择 `h2r_sharpa_flash_sac`；原生 Sharpa／Dexmate／G1 训练配方和 PPO 训练入口已移除。训练、续训、原生诊断评估与 policy viewer 均先校验 H2R 封存输入，拒绝普通 Parquet、原生 checkpoint 和改变共同输入的覆盖。默认沿用上游 `tracking_250m_mixed_reset` 课程，仅为采样到第 0 帧的训练 reset 跳过准备期；具体语义见下文。
+`scripts/train_flash_sac.py` 默认选择 `h2r_sharpa_flash_sac`，同时保留显式 `experiment=sharpa_flash_sac` 原生 Sharpa 对照入口。H2R 的训练、续训、诊断与 viewer 严格校验封存输入；原生入口消费普通 ManoSharpaData Parquet 及其物体／支撑资产，不接受混用的 H2R 机器人或动作配置。Dexmate、G1 和 PPO 入口未恢复。
 
-本目录不再打包原生 Sharpa、Vega/Dexmate、G1 的 URDF／网格或 SONIC policy，也不保留对应适配器和 G1 专用配置。共享的参考绑定、Sharpa 碰撞映射、动作处理和训练算法继续保留。准备阶段仍从相邻 V2D 的 Sharpa MJCF 读取 IK site 朝向，再把 site 放到共同机器人子树上，并使用共同 fingertip 位置；这项有效依赖不能作为旧资产删除。
+原生 Sharpa 配方、双手 URDF、引用网格和 embodiment 来自上游 v0.4.0（`8c778f90`），仅为 Newton 1.5 调整 builder target 的坐标布局。它保留 ball 腕、20 Hz／5 子步、0.5× 播放和原生 settling，供场景与控制诊断；本 fork 的共享 replay／optimizer 数值保护仍存在，不能据此宣称训练算法与上游完全等价。数据资产需另行提供并展开 Git LFS。原生调用示例为 `python scripts/train_flash_sac.py experiment=sharpa_flash_sac "task.parquet='/path/to/native.parquet'"`；路径含 `=` 时保留内层引号。上游 `sample_object_vertices` 仅支持可见 mesh，primitive-only `synthbox` 可训练，但诊断评估导出会明确失败；此既有限制保留。
 
-这条路径是共同机器人上的任务适配配方：30 Hz 控制、4 个物理子步、1× 示范、每手 6 个标量腕关节与 22 个手指关节。它保留原生手位姿残差、滤波、观测、奖励和训练主体；原生 ball 腕 checkpoint 不能直接复用。
+H2R 配方使用 **20 Hz 控制、6 个物理子步、120 Hz 物理、1× 示范**，每手 6 个标量腕关节与 22 个手指关节。H2R 的特征裁剪、状态／样本检查、优化器回滚与 `skip_first_frame_settling=true` 保持启用；这些是保留的行为差异。原生 ball 腕 checkpoint 不能直接用于共同机器人。
+
+共同示范与准备产物保持 30 Hz。加载时复用原生位置／关节线性插值、姿态 SLERP 和接触最近邻采样，按 20 Hz 生成内部参考，并保留精确终点。若终点不落在控制网格上，最后一项是终点样本：例如 6.466667 s 的任务在 6.45 s 最后更新，评估仅再积分 2 个 120 Hz tick。训练环境仍执行均匀控制步，终点样本位于其最后一项；方法内部诊断可能覆盖到 6.5 s，不得视为共同评估时间。`sample_times_s` 明确记录内部参考对应的源时间，新 checkpoint 同时记录这些采样时刻。
+
+历史 30 Hz／4 子步使用 `experiment=h2r_sharpa_flash_sac_30hz`。旧 checkpoint 按保存的频率加载，续训必须显式选择相同频率；不会重写已有 prepared 或 task。准备阶段继续从 V2D 的 Sharpa MJCF 读取 IK site 朝向，并使用共同 fingertip 位置。
 
 | 入口 | 职责 |
 | --- | --- |
 | `python -m flash_chord.h2r.prepare` | 共同输入 → 方法特征、IK、封存参考 |
-| `scripts/train_flash_sac.py` | H2R 配方训练，使用 Newton／MuJoCo-Warp |
+| `scripts/train_flash_sac.py` | H2R 或显式原生 Sharpa 配方训练，使用 Newton／MuJoCo-Warp |
 | `scripts/evaluate_policy.py`、`scripts/view_policy.py` | 原生环境诊断与可视化 |
 | `scripts/debug/view_robot.py`、`view_scene.py` | `--binding` 指定封存包，显示共同机器人／完整场景 |
 | `scripts/debug/replay.py` | H2R 参考回放，默认零残差、VOC=0；Viser 支持运动学参考预览 |
@@ -19,6 +23,16 @@
 | `python -m flash_chord.h2r.cpu_evaluation` | 同一共同模型上的独立 CPU 对齐检查 |
 
 正式共同 rollout 与指标由 bench 执行。准备产物、训练输出和检查记录放在代码目录外；不要删除 checkpoint 仍引用的 prepared 目录或修改其中的封存文件。
+
+## OakInk2 输入
+
+同一准备入口接受已通过准入的 `h2r-preprocess-v2` 或 `h2r-preprocess-v3`／`oakink2-quality-v2` 物理包。当前范围为独立刚体：每个参考部件对应一个自由根；尚不支持 OakInk2 铰接物体、额外固定物体或桌面以外的支撑代理，遇到这些输入会明确拒绝。v3 额外核对 `interaction_objects` 中每个部件的自由根绑定，并要求 `environment` 仅包含共同有限桌面；资产仍从封存的 `scene.xml` 导入。保留原有碰撞分解、原生碰撞体和有限桌面，不在方法侧重新裁剪、去噪或采样。
+
+输入检查区分 120 Hz 源记录与 30 Hz 输出时钟，核对插值源帧映射和完整输出时长。MANO 使用 flat hand mean、腕中心平移，并将全局姿态和位移转换到共同世界坐标；仍用方法原生 MANO loader、接触和 Sharpa IK，逐序列核对共有关节及表面。接触 part ID、对象参考和训练自由根按共同 `part_order` 一一对应，无铰接时 articulation 维度为零。
+
+OakInk2 IK 使用上游的 `mano_to_robot_scale=1.2`、`wrist_offset_xyzw=None`；ARCTIC 保留 1.0 和 `[-0.5, 0.5, 0.5, 0.5]`。实际设置写入 `checks/ik.json` 与 binding；seal 拒绝将旧 IK 冒充新配方。几何检查会恢复 solver 初态及 FK 缓存，避免影响第一帧 IK。已有封存产物保持原参数，要应用新参数须在新目录重新准备。
+
+准备后可按下文同一训练命令使用默认配方。每个实际输入仍须通过模型参数、动作／FK 和短物理 rollout 检查；训练启动或短检查通过不表示任务成功。共同评估支持范围须单独验证。
 
 ## 准备与运行
 
@@ -69,7 +83,7 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 
 `ReferenceReset` 原生行为是在随机参考帧打开部分手指，并保持参考至 `voc_decay_steps` 结束；策略、物理仿真和奖励仍正常运行。默认 `voc_decay_steps=20`、`voc_decay_mode=step`，准备期使用 VOC=1，即使课程的全局 VOC 已降为零。`reset_to_first_frame_probability` 只改变参考帧采样，不恢复完整参考手指姿态。
 
-H2R 配方启用 `reset.skip_first_frame_settling=true`：先按原生规则采样参考帧和手指，若最终选中第 0 帧，则跳过整个准备期，从第一步使用当前课程 VOC 并推进参考；其他帧仍保留原生准备过程。自然抽到第 0 帧、首帧概率覆盖和 `always_reset_to_first_frame` 都遵循同一规则。此开关不改变随机数采样、手指姿态、首帧概率、奖励或训练预算。准备期仍配置为 20 个控制步，在 H2R 30 Hz 下约为 0.67 秒。课程 VOC 尚未归零时，首帧仍有课程规定的辅助，不能将跳过准备期解释为所有阶段均无辅助。
+H2R 配方启用 `reset.skip_first_frame_settling=true`：先按原生规则采样参考帧和手指，若最终选中第 0 帧，则跳过整个准备期，从第一步使用当前课程 VOC 并推进参考；其他帧仍保留原生准备过程。自然抽到第 0 帧、首帧概率覆盖和 `always_reset_to_first_frame` 都遵循同一规则。此开关不改变随机数采样、手指姿态、首帧概率、奖励或训练预算。准备期仍配置为 20 个控制步，在默认 20 Hz 下为 1 秒（历史 30 Hz 为约 0.67 秒）。课程 VOC 尚未归零时，首帧仍有课程规定的辅助，不能将跳过准备期解释为所有阶段均无辅助。
 
 默认课程为上游 `tracking_250m_mixed_reset`：VOC 日程不变，最后约 5000 万步将 `reset_to_first_frame_probability` 提高到 0.5。`skip_first_frame_settling` 的通用默认值为 false，旧配置缺少此字段时保持原行为；当前 H2R 训练可显式设为 false 恢复上游 reset。共同评估仍使用第 0 帧、完整参考手指、零速度和无等待初始化，因此训练保留的随机手指与 eval 仍有差异；此改动不保证任务成功。原生诊断的 `sampled_settled` 模式显式关闭该开关，以保留它所请求的准备期。
 
@@ -84,7 +98,7 @@ H2R 配方启用 `reset.skip_first_frame_settling=true`：先按原生规则采�
 | `human/`、`robot/` | 共同包的独立副本，保持原文件 hash；不回写源包 |
 | `assets/robot.xml` | 有效共同机器人，显式化 position actuator 的实际阻尼 |
 | `assets/ik_{left,right}.xml` | 共同掌部以下的手指模型，供原生 free-flyer IK 使用 |
-| `assets/object.xml`、`assets/support.usda` | 共同两部件单铰链物体与有限桌面 |
+| `assets/object.xml`、`assets/support.usda` | 共同物体场景与有限桌面；ARCTIC 双部件单铰链，OakInk2 独立刚体 |
 | `features.npz` | 原生 MANO 方向和实际计算的接触标签 |
 | `processed.parquet` | 原生手位姿、手指、robot frames 和对象参考 |
 | `robot_reference.npz` | 按共同关节名称排列的 56 维坐标及源时钟 |
@@ -98,7 +112,7 @@ H2R 配方启用 `reset.skip_first_frame_settling=true`：先按原生规则采�
 ## 坐标、资产与控制核验
 
 - 保留共同 world 坐标、米、弧度、`wxyz` 和所有源帧。V2D 与 bench 的 16 个共有 MANO 关节及完整表面须一致。两库选择的 fingertip 顶点不同，方法保留原生顶点，并核对其来自共同表面；这个差异单独记录。
-- IK 使用共同手指几何与限位，保留原生任务权重、warm start、求解器与 task-site 方向；tip-site 位置来自共同 fingertip。准备时以非零多轴姿态比较 Pinocchio／MuJoCo FK，运行时逐帧比较 Newton 与共同参考的掌、DP、tip。
+- IK 使用共同手指几何与限位，保留原生任务权重、warm start、求解器与 task-site 方向；tip-site 位置来自共同 fingertip。准备时以非零多轴姿态比较 Pinocchio／MuJoCo FK，运行时比较 Newton 掌位姿与插值参考，并在共同采样时刻核对 DP、tip；中间时刻由插值腕／手指的 FK 生成，保持原生 Sharpa 绑定语义。
 - 原生动作依旧计算 `q_target = q_ref * quat_rpy(residual)`，`processed_target` 仍为世界掌位姿。最后才转换为 `Rx(roll) Ry(pitch) Rz(yaw)` 与相对零位的 XYZ 平移；按当前真实关节状态选择连续分支，处理 ±π 和 gimbal lock。动作维度是 56，processed pose 维度是 58。此路径只提交位置目标，不额外施加原生 ball 腕 PD 力矩。
 - 物体直接派生 MJCF，避免不必要的 URDF 转换；`ObjectAssetSpec.urdf_path` 沿用原生字段名，在 H2R 专用 scene 中指向此 MJCF。不回退同名 ARCTIC 资产、不再分解碰撞网格、不添加无限地面。保留固定连杆以便逐 body 核对惯量和 frame。
 - 名义物理以共同包为准，覆盖原生场景的摩擦和 solver 默认值。只有控制时钟写在 H2R experiment 中；通用 `sim`／`scene.contact_friction` 默认值不覆盖共同包。VOC、随机 reset 和训练课程仍为方法训练机制，不能用于将来的共同评估。
@@ -110,6 +124,8 @@ H2R 配方启用 `reset.skip_first_frame_settling=true`：先按原生规则采�
 H2R 配方设置 `sim.njmax=1024`，为每个 world 分配约束容量。solver 的物理参数来自共同包，容量来自方法配置；两者在同一创建入口组装，之后校验实际 CPU／GPU 模型。
 
 每次创建 solver 都检查最终 MuJoCo 模型的关节、质量、COM、惯量、重力补偿、位置驱动 gain／bias／限幅、接触参数、碰撞凸包、有效碰撞配对和桌面尺寸；额外核验动态自由度、固定支撑、物理开关，以及实际 GPU 模型的 armature、meaninertia 和接触参数。错误在训练前抛出；这些检查不宣称 MuJoCo CPU 与 MuJoCo-Warp 长时闭环轨迹完全相同。
+
+原生 capsule 的尺寸按 MuJoCo 语义核对半径与中心线半长；Newton 在 `geom_size[2]` 写入的冗余半径不参与 capsule 几何，校验不将该填充值当作物理差异。碰撞体类型、位姿、有效尺寸和物体惯量仍逐项核对。
 
 环境 reset 在恢复参考状态后，按 world 调用 Newton solver reset，保留参考 q/qvel 并清理 warmstart、外力和 actuator 缓存；接触观测也按 world 清空。ReplayRunner 同样清理 solver 历史。以上操作支持捕获进 CUDA graph，不影响未选中的 world。`evaluation.deterministic=true` 只选择确定性 actor，默认 MuJoCo-Warp 的并行浮点归约与接触排列仍不保证多圈或独立进程逐位相同；不能据此将 viewer 第一圈当作完整重复性验证。
 
@@ -134,11 +150,11 @@ FLASHCHORD_H2R_SCENE=/path/to/bench-task/scene/scene.xml \
   "$FLASH_PY" -m pytest -q tests/test_h2r_physics.py
 ```
 
-该检查覆盖实际 GPU 参数的故障注入，以及相同首帧和相同关节目标下含接触的短 CPU/GPU rollout。
+该检查覆盖实际 GPU 参数的故障注入，以及相同首帧和关节目标下的短 MJWarp 物理对照；CPU MuJoCo 仅核对 FK。捕获 `env.reset()` 时仅执行设备检查；重放 graph 后调用 `env.check_reset_validity(reset_mask)` 报告选中 world 的错误。普通 reset 继续即时报告错误。
 
 ## 共同物理评估部署
 
-Bench 用此次训练绑定的共同 human／scene 与 robot 包执行 `prepare-evaluation --contacts`，准备 metric spec 后启动 UniSim MuJoCo evaluator。方法在自己的环境启动常驻客户端：
+Bench 用此次训练绑定的共同 human／scene 与 robot 包执行 `prepare-evaluation --contacts --physics-hz 120 --control-hz 20`，准备 metric spec 后启动 UniSim MuJoCo evaluator。方法在自己的环境启动常驻客户端：
 
 ```bash
 "$FLASH_PY" -m flash_chord.h2r.evaluation \
@@ -146,13 +162,13 @@ Bench 用此次训练绑定的共同 human／scene 与 robot 包执行 `prepare-
   --prepared "$PREPARED" --output /path/to/new-controller-output
 ```
 
-`h2r/controller.py` 复用原生 `PolicyObservation`、`ContactTracker`、FlashSAC actor loader 与 `H2rHandPoseAction`。它只建立方法几何与数值 buffer，不创建 solver、VOC、reward 或自动 reset 环境；反馈全部来自 evaluator。任务绑定、完整关节名字、30 Hz／120 Hz 时钟、checkpoint schema 和准备产物逐项核对。当前 checkpoint 的 metadata 引用了训练 prepared 的路径，该路径也必须可读且与部署 prepared 的完整 binding 一致；不能给旧 checkpoint 任意换参考包。
+`h2r/controller.py` 复用原生 `PolicyObservation`、`ContactTracker`、FlashSAC actor loader 与 `H2rHandPoseAction`。它只建立方法几何与数值 buffer，不创建 solver、VOC、reward 或自动 reset 环境；反馈全部来自 evaluator。任务绑定、完整关节名字、checkpoint 控制周期与 task 的整数物理 tick 时钟、checkpoint schema 和准备产物逐项核对。当前 checkpoint 的 metadata 引用了训练 prepared 的路径，该路径也必须可读且与部署 prepared 的完整 binding 一致；不能给旧 checkpoint 任意换参考包。
 
 接触使用 `h2r-body-contacts-v1`：最后求解时刻的 body-local 两侧表面点、具名两侧 body，以及作用在第二侧的世界系力。方法恢复原生 shape→link 映射，使用当前真实 body pose 和原生内核进行聚合；零力不等于没有接触。首帧接触特征置零沿用原生规则，后续缺失接触会报错。Bench 的 body 原点速度须先加上 `ω × R(body_com)`，恢复 Newton FK 的质心速度，再送入训练时的原生观测内核；不能直接复制这两个不同参考点的线速度，也不在部署时修改原生观测算法。
 
 策略与原生观测／动作 buffer 保留 CUDA 运算和 checkpoint 的计算 dtype。入口在 JAX 初始化前设置 `--xla_gpu_deterministic_ops=true --xla_gpu_autotune_level=0`，每次 actor 推理固定为一个 episode，避免独立进程 autotuning 或评估批量改变浮点计算路径；冲突的 XLA 设置明确拒绝。`--device` 默认 `cuda:0`，物理 evaluator 的 MuJoCo CPU 与方法的 CUDA 推理是独立选择。EMA、原生残差旋转组合、历史及连续腕分支均保留；不附加目标机械限位裁剪。当前入口要求零 delay、无 arm integral、无额外方法速度限制的 H2R 配方。
 
-每个 episode 仅提交一次首帧具名机器人初态，后续 tick 每四个物理步更新；终态不再产生动作。控制器输出目录保存 checkpoint hash、配置、输入绑定、XLA flags、观测／动作／目标及耗时，成绩与 physical rollout 由 bench 记录。不同训练输入或 backend 必须另做验证；此入口不保证任务成功。
+每个 episode 仅提交一次首帧具名机器人初态，后续按 task 的 `control_ticks` 更新（默认 20／120 Hz 为 6 tick，历史 30／120 Hz 为 4 tick）；终态不再产生动作。控制器输出目录保存 checkpoint hash、配置、输入绑定、XLA flags、观测／动作／目标及耗时，成绩与 physical rollout 由 bench 记录。不同训练输入或 backend 必须另做验证；此入口不保证任务成功。
 
 部署一致性检查需要 checkpoint、binding 和 evaluator `hello` 的封存 JSON：
 
@@ -163,7 +179,7 @@ FLASHCHORD_H2R_HELLO=/path/to/hello.json \
   "$FLASH_PY" -m pytest -q -s tests/test_h2r_evaluation.py
 ```
 
-该检查使用原生 GPU 环境的连续真实状态与接触，显式转换质心／原点速度，并打乱关节顺序、交换接触两侧，比较观测、actor、历史与最终控制。运行报告放在各自输出目录，不将训练日志或原生 viewer 的重播当作共同成绩。
+该检查使用 H2R 适配 GPU 环境的连续真实状态与接触，显式转换质心／原点速度，并打乱关节顺序、交换接触两侧，比较观测、actor、历史与最终控制；它验证适配内部部署一致性，不等于完整上游复现。运行报告放在各自输出目录，不将训练日志或原生 viewer 的重播当作共同成绩。
 
 共同场景的独立 CPU eval 使用以下入口：
 

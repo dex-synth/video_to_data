@@ -1,0 +1,9 @@
+# @package _global_
+# Historical H2R control recipe; old checkpoints keep their saved configuration.
+defaults:
+  - h2r_sharpa_flash_sac
+  - _self_
+
+sim:
+  fps: 30.0
+  substeps: 4

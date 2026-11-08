@@ -16,7 +16,7 @@ from omegaconf import DictConfig
 
 from flash_chord.configuration import instantiate_typed
 from flash_chord.embodiments.base import Embodiment
-from flash_chord.h2r.configuration import require_h2r_input
+from flash_chord.h2r.configuration import validate_input
 from flash_chord.runtime.replay import ReplayConfig, ReplayRunner
 from flash_chord.scene.collision import CollisionPolicy
 from flash_chord.scene.setup import setup_scene
@@ -28,7 +28,7 @@ class Replay(ViewerApp):
     def __init__(self, viewer, args):
         super().__init__(viewer, args)
         cfg = args.config
-        require_h2r_input(cfg)
+        validate_input(cfg)
         embodiment = instantiate_typed(cfg.embodiment, Embodiment)
         collision = instantiate_typed(cfg.collision, CollisionPolicy)
         replay_cfg = instantiate_typed(cfg.replay, ReplayConfig)
@@ -187,7 +187,7 @@ class Replay(ViewerApp):
 @hydra.main(version_base="1.3", config_path="../../src/flash_chord/configs", config_name="replay")
 def main(cfg: DictConfig) -> None:
     """Launch a replay using one composed config and no experiment-specific argparse layer."""
-    require_h2r_input(cfg)
+    validate_input(cfg)
     viewer = instantiate_typed(cfg.viewer, ViewerConfig)
     Replay.launch_configured(cfg, viewer, device=cfg.device)
 

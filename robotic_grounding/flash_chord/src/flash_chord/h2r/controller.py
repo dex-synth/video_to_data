@@ -74,9 +74,6 @@ class Controller:
                 or obs.get("contact_schema") != "h2r-body-contacts-v1"
                 or obs["quaternion"] != "wxyz" or obs["body_velocity"] != "world_at_body_origin"):
             raise ValueError("Unsupported physical observation contract")
-        if (hello["control_ticks"] != 4 or not np.isclose(hello["dt_s"], 1 / 120, rtol=0, atol=1e-12)
-                or not np.isclose(hello["end_tick"] * hello["dt_s"], self.binding["duration_s"], atol=1e-12)):
-            raise ValueError("Task clock differs from trained H2R reference")
         metadata = read_checkpoint_metadata(checkpoint)
         self.saved_config = checkpoint_config(metadata)
         cfg = OmegaConf.create(self.saved_config)
@@ -86,9 +83,15 @@ class Controller:
         env = cfg.env
         if (env.arm_position_integral.gain_s_inv2 != 0 or env.enforce_joint_velocity_limits
                 or env.action.delay.min_steps != 0 or env.action.delay.max_steps != 0
-                or env.sim.fps != 30 or env.sim.substeps != 4):
-            raise ValueError("Deployment requires the trained 30 Hz, zero-delay position controller")
-        self.reference = load_h2r(binding_path)
+                or (env.sim.fps, env.sim.substeps) not in ((20, 6), (30, 4))):
+            raise ValueError("Deployment requires the trained 20/30 Hz, zero-delay position controller")
+        self.control_dt = 1 / env.sim.fps
+        self.control_ticks = hello["control_ticks"]
+        if (type(self.control_ticks) is not int or self.control_ticks <= 0
+                or not np.isclose(self.control_ticks * hello["dt_s"], self.control_dt, rtol=0, atol=1e-12)
+                or not np.isclose(hello["end_tick"] * hello["dt_s"], self.binding["duration_s"], rtol=0, atol=1e-12)):
+            raise ValueError("Task clock differs from trained H2R reference")
+        self.reference = load_h2r(binding_path, control_fps=env.sim.fps)
         validate_reference_config(self.saved_config, self.reference)
         with wp.ScopedDevice(self.device):
             self.scene = build_h2r_scene(self.reference, H2rSharpaHands(binding_path), self.count,
@@ -143,7 +146,7 @@ class Controller:
                 raise ValueError(f"Body-level contacts cannot represent different shape roles: {name}")
         with np.load(prepared / "robot_reference.npz", allow_pickle=False) as data:
             self.initial = dict(zip(data["joint_names"].tolist(), data["joint_q"][0].tolist()))
-        self.last_tick = {identity: -4 for identity in self.ids}
+        self.last_tick = {identity: -self.control_ticks for identity in self.ids}
         self.finished = set()
 
     def start(self):
@@ -151,7 +154,8 @@ class Controller:
                 "binding": {"bundle_id": self.binding["human_bundle_id"],
                             "robot_manifest_sha256": self.binding["robot_manifest_sha256"],
                             "method": "flashchord", "controller": "flashchord.h2r.evaluation"},
-                "requirements": {"bodies": list(self.observed_bodies.values()), "contacts": True, "control_dt_s": 1 / 30},
+                "requirements": {"bodies": list(self.observed_bodies.values()), "contacts": True,
+                                 "control_dt_s": self.control_dt},
                 "initial_robot": {identity: self.initial for identity in self.ids}}
 
     def update(self, frames):
@@ -173,12 +177,12 @@ class Controller:
                 continue
             tick = frame["tick"]
             if (identity in self.finished or type(tick) is not int
-                    or tick != self.last_tick[identity] + 4 or tick >= self.hello["end_tick"]):
+                    or tick != self.last_tick[identity] + self.control_ticks or tick >= self.hello["end_tick"]):
                 raise ValueError("Stale, terminal or out-of-order control tick")
             if not np.isclose(frame["time_s"], tick * self.hello["dt_s"], rtol=0, atol=1e-12):
                 raise ValueError("Frame time differs from tick")
             self.last_tick[identity] = tick
-            phase[world] = tick // 4
+            phase[world] = tick // self.control_ticks
             q[world, self.q_ids] = finite_array(frame["robot_q"], (len(self.names),), "robot_q")[self.columns]
             dq[world, self.dof_ids] = finite_array(frame["robot_dq"], (len(self.names),), "robot_dq")[self.columns]
             for body, name in self.observed_bodies.items():

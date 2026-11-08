@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Public H2R recipe composition and rejected legacy training selections."""
+"""H2R and native Sharpa recipe composition and input boundaries."""
 
 from pathlib import Path
 
@@ -10,7 +10,7 @@ from omegaconf import MissingMandatoryValue
 
 from flash_chord.configuration import compose_config, instantiate_typed, resolve_path, resolved_dict
 from flash_chord.evaluation.view import PolicyViewConfig
-from flash_chord.h2r.configuration import require_h2r_input
+from flash_chord.h2r.configuration import require_h2r_input, validate_input
 from flash_chord.training.flash_sac.config import TrainingConfig
 from flash_chord.visualization.viewer import ViewerConfig
 
@@ -31,7 +31,7 @@ def test_default_is_the_complete_h2r_recipe():
     assert config.embodiment._target_ == "flash_chord.h2r.robot.H2rSharpaHands"
     assert config.env.action._target_ == "flash_chord.h2r.action.H2rActionConfig"
     assert config.task.motion_speed == 1
-    assert (config.env.sim.fps, config.env.sim.substeps) == (30, 4)
+    assert (config.env.sim.fps, config.env.sim.substeps) == (20, 6)
     assert config.scene.support and not config.scene.decompose_objects
     assert config.action.input_mode == "normalized"
     assert config.action.normalized_mapping == "rational"
@@ -46,7 +46,7 @@ def test_default_is_the_complete_h2r_recipe():
 
 
 @pytest.mark.parametrize("experiment", [
-    "sharpa_flash_sac", "sharpa_ppo", "dexmate_sharpa_flash_sac",
+    "sharpa_ppo", "dexmate_sharpa_flash_sac",
     "g1_recon_body_ppo", "g1_recon_body_flash_sac",
 ])
 def test_native_training_recipes_are_not_available(experiment):
@@ -59,7 +59,7 @@ def test_native_training_recipes_are_not_available(experiment):
     "action._target_=flash_chord.runtime.actions.ActionConfig",
     "task.motion_speed=0.5", "task.motion_start_frame=1",
     "task.motion_end_frame=10", "task.source_frame_playback=true",
-    "sim.fps=20", "sim.substeps=5",
+    "sim.fps=25", "sim.substeps=5",
     "scene.support=false", "scene.decompose_objects=true", "scene.object_scale_min=0.8",
     "embodiment.binding_path=/other/h2r_binding.json",
     "~experiment",
@@ -102,7 +102,7 @@ def test_resolve_path_uses_invocation_directory(monkeypatch, tmp_path):
     assert resolve_path("checkpoint.ckpt") == Path(tmp_path, "checkpoint.ckpt")
 
 
-@pytest.mark.parametrize("embodiment", ["sharpa_hands", "sharpa_hands_stiff", "sharpa_hands_primitive", "dexmate_sharpa", "g1_dex3"])
+@pytest.mark.parametrize("embodiment", ["sharpa_hands_stiff", "sharpa_hands_primitive", "dexmate_sharpa", "g1_dex3"])
 def test_native_robot_configs_are_not_available(embodiment):
     with pytest.raises(MissingConfigException):
         compose_config("train_flash_sac", [f"embodiment={embodiment}", _BINDING])
@@ -112,9 +112,30 @@ def test_native_robot_configs_are_not_available(embodiment):
 def test_replay_uses_the_common_robot_clock_and_action(runtime):
     cfg = compose_config("replay", [_BINDING])
     assert cfg.replay.action._target_ == "flash_chord.h2r.action.H2rActionConfig"
-    assert (cfg.replay.sim.fps, cfg.replay.sim.substeps) == (30, 4)
+    assert (cfg.replay.sim.fps, cfg.replay.sim.substeps) == (20, 6)
     assert cfg.scene.world_count == 1
     assert cfg.replay.voc_scale == 0
     cfg[runtime].action = {"_target_": "flash_chord.runtime.actions.ActionConfig"}
     with pytest.raises(ValueError, match="H2R"):
         require_h2r_input(cfg)
+
+
+def test_native_sharpa_recipe_is_explicit_and_keeps_native_clock():
+    config = compose_config("train_flash_sac", [
+        "experiment=sharpa_flash_sac", "task.parquet=/tmp/reference.parquet"])
+    assert validate_input(config) is None
+    assert (config.env.sim.fps, config.env.sim.substeps) == (20, 5)
+    assert config.task.motion_speed == 0.5
+    assert config.env.reset.skip_first_frame_settling is False
+    assert config.env.action._target_ == "flash_chord.runtime.actions.ActionConfig"
+    with pytest.raises(ValueError, match="same input recipe"):
+        validate_input(config, expected_binding={"scene_id": "sealed"})
+    config.task.parquet = "/tmp/h2r_binding.json"
+    with pytest.raises(ValueError, match="H2R"):
+        validate_input(config)
+
+
+def test_historical_30hz_recipe_remains_explicit():
+    config = compose_config("train_flash_sac", ["experiment=h2r_sharpa_flash_sac_30hz", _BINDING])
+    assert (config.env.sim.fps, config.env.sim.substeps) == (30, 4)
+    assert config.task.motion_speed == 1

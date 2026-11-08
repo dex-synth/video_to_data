@@ -50,11 +50,35 @@ def verify_files(root, files):
             raise ValueError(f"Input changed: {root}/{name}")
 
 
+def validate_oakink_v3(scene, reference):
+    """Accept the canonical partition only for the existing rigid/table recipe."""
+    parts = reference["object_geometry"]["part_order"]
+    objects = scene["interaction_objects"]
+    if (set(objects) != set(parts) or set(scene["parts"]) != set(parts)
+            or set(scene["resources"]) != set(parts)):
+        raise ValueError("OakInk2 interaction objects differ from the reference parts")
+    for part in parts:
+        obj = objects[part]
+        if (obj["parts"] != {part: "object_" + part} or obj["joints"]
+                or obj["root"] != {"part": part, "body": "object_" + part,
+                                   "joint": "object_" + part + "_free", "motion": "free"}):
+            raise ValueError("OakInk2 currently supports independent rigid dynamic parts only")
+    environment = scene["environment"]
+    if set(environment) != {"table"}:
+        raise ValueError("OakInk2 currently supports the common finite table without extra environment bodies")
+    table = environment["table"]
+    if (table["body"] != "world" or table["shape"] != "box"
+            or table["collision_geoms"] != ["table"] or table["contact_role"] != "table"
+            or table["quat_wxyz"] != [1., 0., 0., 0.]
+            or table["contact"] != scene["settings"]["contact"]):
+        raise ValueError("Unsupported canonical OakInk2 table binding")
+
+
 def human_bundle(path):
     path = Path(path).resolve()
     manifest = read_json(path / "bundle.json")
     files = manifest["files"]
-    if manifest["format"] != "h2r-preprocess-v1" or content_hash(files) != manifest["bundle_id"]:
+    if manifest["format"] not in ("h2r-preprocess-v1", "h2r-preprocess-v2", "h2r-preprocess-v3") or content_hash(files) != manifest["bundle_id"]:
         raise ValueError("Invalid H2R human bundle")
     verify_files(path, files)
     reference, scene = (read_json(path / name) for name in ("reference.json", "scene.json"))
@@ -66,11 +90,42 @@ def human_bundle(path):
         raise ValueError("Scene recipe changed")
     if reference["reference_hz"] != 30 or reference["speed"] != 1.0:
         raise ValueError("H2R input must retain 30 Hz and 1x speed")
-    if reference["object_geometry"]["part_order"] != ["bottom", "top"]:
+    oakink = reference["dataset"] == "oakink2"
+    if manifest["format"] == "h2r-preprocess-v3":
+        if not oakink or manifest.get("kind") != "physical" or scene["format"] != manifest["format"]:
+            raise ValueError("H2R v3 currently requires a physical OakInk2 scene")
+        validate_oakink_v3(scene, reference)
+    if not oakink and reference["object_geometry"]["part_order"] != ["bottom", "top"]:
         raise ValueError("Only the two-part ARCTIC contract is supported")
     with np.load(path / "reference.npz", allow_pickle=False) as data:
         arrays = dict(data)
     start, stop = reference["source_frame_range"]
+    if oakink:
+        if manifest["format"] not in ("h2r-preprocess-v2", "h2r-preprocess-v3") or reference["source_hz"] != 120:
+            raise ValueError("OakInk2 requires the v2/v3 120 Hz source contract")
+        processing = reference.get("processing", {})
+        if processing.get("version") != "oakink2-quality-v2" or not read_json(path / "readiness.json")["ready"]:
+            raise ValueError("OakInk2 requires an admitted quality-v2 reference")
+        physical = scene["recipe"]["physical"]
+        if physical["joints"] or set(physical["roots"]) != set(reference["object_geometry"]["part_order"]):
+            raise ValueError("OakInk2 currently supports independent rigid dynamic parts only")
+        if physical.get("fixed_bodies") or scene["settings"].get("supports"):
+            raise ValueError("OakInk2 currently supports the common finite table without extra fixed bodies")
+        if not (reference["mano"]["flat_hand_mean"] and reference["mano"].get("wrist_recentered")
+                and reference["mano"].get("parameter_coordinates") == "source_world"):
+            raise ValueError("Unsupported OakInk2 MANO parameter convention")
+        count = len(arrays["time_s"])
+        times = np.arange(count) / 30
+        np.testing.assert_allclose(arrays["time_s"], times, atol=1e-12, rtol=0)
+        np.testing.assert_allclose(arrays["source_time_s"], start / 120 + times, atol=1e-12, rtol=0)
+        mapped = arrays["source_frame_left"] + arrays["source_weight"] * (
+            arrays["source_frame_right"] - arrays["source_frame_left"])
+        np.testing.assert_allclose(mapped, arrays["source_time_s"] * 120, atol=1e-9, rtol=0)
+        if count != int(np.floor((stop - start - 1) / 4)) + 1:
+            raise ValueError("OakInk2 output does not cover its complete 30 Hz window")
+        if not np.isclose(reference["duration_s"], times[-1], atol=1e-12, rtol=0):
+            raise ValueError("OakInk2 output duration changed")
+        return manifest, reference, scene, arrays
     if not np.array_equal(arrays["source_frame"], np.arange(start, stop)):
         raise ValueError("Source frame mapping changed")
     for key, expected in (("time_s", np.arange(stop - start) / 30), ("source_time_s", np.arange(start, stop) / 30)):

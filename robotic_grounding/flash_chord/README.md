@@ -75,13 +75,21 @@ Change `markers.enabled=false` to `markers.enabled=true` in replay/policy comman
 
 ## H2R inputs
 
-This fork exposes one training recipe: `h2r_sharpa_flash_sac`. It requires a sealed `h2r_binding.json`
+This fork defaults to `h2r_sharpa_flash_sac`. It requires a sealed `h2r_binding.json`
 prepared from h2r_bench human/scene and `virtual_wrist_sharpa_wave_bimanual` robot bundles.
 See [H2R preparation and deployment](docs/h2r_inputs.md) for the preparation command and independent environments.
 
 The common input fixes the complete 56-coordinate robot, articulated object, finite support, source window,
-1× speed and 30 Hz / four physics substeps. Ordinary Parquet files and native robot recipes are rejected.
+1× speed and a 30 Hz source reference. The policy runs at native 20 Hz with six 120 Hz physics
+substeps. H2R inputs require this common robot; they never fall back to native assets.
 Method-specific IK, contacts, FlashSAC, rewards and VOC training curriculum remain in this codebase.
+`experiment=h2r_sharpa_flash_sac_30hz` retains the historical 30 Hz / four-substep recipe.
+Checkpoint-driven deployment uses the saved control frequency and the task's exact endpoint.
+
+For an explicit native Sharpa comparison, use `experiment=sharpa_flash_sac` with a native
+ManoSharpaData Parquet and its object/support assets. The restored URDFs, meshes, ball wrists,
+20 Hz / five-substep clock and 0.5× playback follow upstream v0.4.0. Shared numerical safeguards
+remain in this fork; this entry does not claim an unmodified upstream training algorithm.
 
 ## Train
 

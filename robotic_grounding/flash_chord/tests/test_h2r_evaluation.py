@@ -1,4 +1,4 @@
-"""Optional deployment parity against actual native states and measured contacts."""
+"""H2R deployment parity against method environment states and measured contacts."""
 
 import json
 import os
@@ -69,7 +69,7 @@ def native_frame(controller, env, tick):
             record["body1"], record["body2"] = record["body2"], record["body1"]
             record["point1_local"], record["point2_local"] = record["point2_local"], record["point1_local"]
             record["force_on_body2_world"] = (-np.asarray(record["force_on_body2_world"])).tolist()
-    return {"episode_id": c.ids[0], "done": False, "tick": tick, "time_s": tick / 120,
+    return {"episode_id": c.ids[0], "done": False, "tick": tick, "time_s": tick * c.hello["dt_s"],
             "robot_q": [float(q[n]) for n in names], "robot_dq": [float(dq[n]) for n in names],
             "bodies": {name: np.r_[body[i, [0, 1, 2, 6, 3, 4, 5]], velocity[i]].tolist()
                        for i, name in c.observed_bodies.items()},
@@ -77,11 +77,14 @@ def native_frame(controller, env, tick):
 
 
 @pytest.mark.gpu
-def test_native_state_observation_actor_and_control_parity(controller):
+def test_h2r_state_observation_actor_and_control_parity(controller):
     c = controller
     assert c.count == 1
     cfg = OmegaConf.create(c.saved_config["env"])
     cfg.auto_reset = False
+    # Deployment runs to the benchmark endpoint even after a tracking failure.
+    for name in ("wrist_position", "wrist_orientation", "object_position", "object_orientation"):
+        cfg.termination[name].enabled = False
     cfg.voc_scale = 0
     cfg.voc.max_force = cfg.voc.max_torque = 0
     cfg.reset.voc_decay_steps = 0
@@ -100,7 +103,7 @@ def test_native_state_observation_actor_and_control_parity(controller):
         max_difference = {"observation": 0., "action": 0., "target": 0.}
         contacts_seen = 0
         for step in range(24):
-            frame = native_frame(c, env, step * 4)
+            frame = native_frame(c, env, step * c.control_ticks)
             contacts_seen += len(frame["contacts"]["records"])
             native_obs = env.observation_strategy.compute(env.state_0).numpy().reshape(1, -1)
             native_action, _ = gpu_policy(gpu_actor, jax.device_put(native_obs, gpu), gpu_key)
@@ -122,3 +125,14 @@ def test_native_state_observation_actor_and_control_parity(controller):
         result, _ = c.step([frame])
         assert result["commands"] == {}
         print("deployment parity", max_difference, "raw contacts", contacts_seen)
+
+
+@pytest.mark.parametrize("field,value", [("control_ticks", 5), ("dt_s", 0.01), ("end_tick", 1)])
+def test_checkpoint_rejects_incompatible_task_clock(controller, field, value):
+    from copy import deepcopy
+
+    hello = deepcopy(controller.hello)
+    hello[field] = value
+    with pytest.raises(ValueError, match="Task clock"):
+        Controller(os.environ["FLASHCHORD_H2R_CHECKPOINT"],
+                   controller.reference.binding_path.parent, hello)

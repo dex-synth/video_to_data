@@ -66,8 +66,8 @@ def build_solver(model, cfg: SimConfig):
     }
     settings = getattr(model, "h2r_settings", None)
     if settings is not None:
-        if abs(cfg.sim_dt - settings["timestep_s"]) > 1e-12 or cfg.fps != 30 or not cfg.use_mujoco_contacts:
-            raise ValueError("H2R requires 30 Hz control, its exact physical timestep and MuJoCo contacts")
+        if abs(cfg.sim_dt - settings["timestep_s"]) > 1e-12 or cfg.fps not in (20, 30) or not cfg.use_mujoco_contacts:
+            raise ValueError("H2R requires 20/30 Hz control, its exact physical timestep and MuJoCo contacts")
         # The common task owns physics settings; the method owns buffer capacity.
         options.update({name: settings[name] for name in (*options, "tolerance")})
         for name in ("solver", "integrator", "cone"):

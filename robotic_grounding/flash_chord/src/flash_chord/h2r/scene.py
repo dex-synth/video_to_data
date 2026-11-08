@@ -19,7 +19,8 @@ def build_h2r_scene(reference, embodiment, world_count, collision):
     if not isinstance(embodiment, H2rSharpaHands) or collision != CollisionPolicy(ground=False):
         raise ValueError("H2R scene requires its Sharpa embodiment and the complete ground-free collision policy")
     root = reference.binding_path.parent
-    settings = read_json(root / "human" / "scene.json")["settings"]
+    common_scene = read_json(root / "human" / "scene.json")
+    settings = common_scene["settings"]
     if settings["gravity_m_s2"][:2] != [0, 0]:
         raise ValueError("H2R currently requires Z-axis gravity")
     builder = CommonModelBuilder(gravity=settings["gravity_m_s2"][2])
@@ -28,6 +29,35 @@ def build_h2r_scene(reference, embodiment, world_count, collision):
     robot_shapes = ShapeSpan(0, builder.shape_count)
     builder.add_mjcf(str(root / "assets" / "object.xml"), parse_mujoco_options=False, collapse_fixed_joints=False)
     object_shapes = ShapeSpan(robot_shapes.stop, builder.shape_count)
+    if common_scene.get("dataset") == "oakink2":
+        objects = bind_rigid_objects(builder, reference, object_shapes)
+    else:
+        objects = [bind_arctic_object(builder, reference, object_shapes)]
+    support = add_support_surfaces(builder, root / "assets" / "support.usda")
+    return finalize_scene(builder, reference, layout, robot_reference, robot_shapes,
+                          object_shapes, support, objects, settings, world_count, collision)
+
+
+def bind_rigid_objects(builder, reference, object_shapes):
+    """Bind each independent root; fixed scene bodies remain collision-only support."""
+    objects = []
+    joints = joint_ids(builder)
+    for index, part in enumerate(reference.object_body_names()):
+        body = capture_body_ids(builder, ("object_" + part,))["object_" + part]
+        free = joints["object_" + part + "_free"]
+        q, d = builder.joint_q_start[free], builder.joint_qd_start[free]
+        builder.joint_q[q:q+3] = reference.object_body_pos_w()[0, index].tolist()
+        builder.joint_q[q+3:q+7] = reference.object_body_quat_w()[0, index, [1, 2, 3, 0]].tolist()
+        shapes = [s for s in object_shapes.ids() if builder.shape_body[s] == body]
+        if not shapes or shapes != list(range(shapes[0], shapes[-1] + 1)):
+            raise ValueError(f"Expected contiguous common collision geometry for {part}")
+        objects.append(ObjectBinding(part, (ObjectBodyBinding(body, index),),
+            ObjectRootBinding(body, index, tuple(range(q, q+7)), tuple(range(d, d+6))),
+            (), ShapeSpan(shapes[0], shapes[-1] + 1)))
+    return objects
+
+
+def bind_arctic_object(builder, reference, object_shapes):
     bodies = capture_body_ids(builder, ("object_bottom", "object_top"))
     joints = joint_ids(builder)
     free = joints["object_free"]
@@ -49,7 +79,11 @@ def build_h2r_scene(reference, embodiment, world_count, collision):
         (ObjectJointBinding(hq, hd, 0, drive),),
         object_shapes,
     )
-    support = add_support_surfaces(builder, root / "assets" / "support.usda")
+    return obj
+
+
+def finalize_scene(builder, reference, layout, robot_reference, robot_shapes,
+                   object_shapes, support, objects, settings, world_count, collision):
     collision_layout = capture_collision_layout(builder, layout, robot_shapes, object_shapes, support.shapes)
     # The common scene's contact override applies to robot pads as well as objects/table.
     contact = settings["contact"]
@@ -86,9 +120,9 @@ def build_h2r_scene(reference, embodiment, world_count, collision):
         robot_reference=robot_reference,
         collision_layout=collision_layout,
         collision_policy=collision,
-        objects=[obj],
+        objects=objects,
         support=support,
-        object_scales=np.ones((world_count, 1)),
-        object_root_position_offsets_w=np.zeros((world_count, 1, 3)),
+        object_scales=np.ones((world_count, len(objects))),
+        object_root_position_offsets_w=np.zeros((world_count, len(objects), 3)),
         world_count=world_count,
     )

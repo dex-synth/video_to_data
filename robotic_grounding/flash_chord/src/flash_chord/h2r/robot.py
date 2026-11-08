@@ -13,6 +13,7 @@ from flash_chord.embodiments.sharpa_collision import capture_sharpa_link_geometr
 
 from .inputs import SIDES, WRIST, frame_names, load_binding, robot_bundle
 from .reference import H2rReference
+from .wrist import wrist_coordinates
 
 
 def joint_ids(builder):
@@ -97,6 +98,19 @@ class H2rSharpaHands:
         with np.load(self.binding_path.parent / "robot_reference.npz", allow_pickle=False) as data:
             names = list(data["joint_names"])
             q = data["joint_q"][:, [names.index(n) for n in layout.scalar_joints.names]].astype(np.float32)
+        if reference.fps != 30:
+            initial = q[0].copy()
+            q = np.zeros((reference.num_frames, layout.num_joint_q), dtype=np.float32)
+            for hand in layout.hands:
+                base = reference.wrist_pos_w(hand.side)[0] - initial[list(hand.arm_q_ids[:3])]
+                previous = initial[list(hand.arm_q_ids[3:])]
+                for t, (position, orientation) in enumerate(zip(
+                        reference.wrist_pos_w(hand.side), reference.wrist_quat_w(hand.side), strict=True)):
+                    wrist = wrist_coordinates(position, orientation, base, previous)
+                    q[t, hand.arm_q_ids] = wrist
+                    previous = wrist[3:]
+                columns = [reference.finger_joint_names(hand.side).index(n) for n in hand.finger_joint_names]
+                q[:, hand.finger_q_ids] = reference.finger_joint_pos(hand.side)[:, columns]
         if q.shape != (reference.num_frames, 56):
             raise ValueError("Common robot reference must have 56 coordinates per source frame")
         binding = build_robot_reference_binding(builder, layout, q, q.copy(), reference.fps)
@@ -108,6 +122,11 @@ class H2rSharpaHands:
             if reference.frame_names(hand.side) != frame_names(hand.side):
                 raise ValueError("Common robot frame order changed")
             frames = reference.frame_pos_w(hand.side)
-            np.testing.assert_allclose(bound.dp_pos_w, frames[:, 1:6], atol=2e-6, rtol=0)
-            np.testing.assert_allclose(bound.fingertip_pos_w, frames[:, 6:], atol=2e-6, rtol=0)
+            # At source instants FK must still match the sealed IK. Between
+            # samples, use FK of interpolated wrist/fingers, as native Sharpa
+            # binding does; linearly interpolated link positions are not FK.
+            source_frames = reference.sample_times_s * 30
+            exact = np.isclose(source_frames, np.round(source_frames), atol=1e-9, rtol=0)
+            np.testing.assert_allclose(bound.dp_pos_w[exact], frames[exact, 1:6], atol=2e-6, rtol=0)
+            np.testing.assert_allclose(bound.fingertip_pos_w[exact], frames[exact, 6:], atol=2e-6, rtol=0)
         return binding

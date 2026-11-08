@@ -13,6 +13,15 @@ from scipy.spatial.transform import Rotation
 from .inputs import DIGITS, FORMAT, ROBOT, SIDES, digest, frame_names, human_bundle, robot_bundle, write_json
 
 
+def ik_settings(dataset):
+    """Dataset-specific defaults from the upstream Sharpa retargeting entries."""
+    if dataset == "oakink2":
+        return {"mano_to_robot_scale": 1.2, "wrist_offset_xyzw": None}
+    if dataset == "arctic":
+        return {"mano_to_robot_scale": 1.0, "wrist_offset_xyzw": [-0.5, 0.5, 0.5, 0.5]}
+    raise ValueError(f"Unsupported Sharpa IK dataset: {dataset}")
+
+
 def check_ik_model(solver, model, state, side, fingers, wrist_ids, base):
     """Compare derived Pinocchio FK to common MuJoCo FK at nonzero poses."""
     import mujoco
@@ -24,6 +33,7 @@ def check_ik_model(solver, model, state, side, fingers, wrist_ids, base):
     ranges = np.array([model.joint(name).range for name in fingers])
     np.testing.assert_allclose(solver.robot.model.lowerPositionLimit[7:], ranges[:, 0], atol=1e-8)
     np.testing.assert_allclose(solver.robot.model.upperPositionLimit[7:], ranges[:, 1], atol=1e-8)
+    original_q = solver.configuration.q.copy()
     max_error = 0.0
     for _ in range(5):
         q = solver.robot.q0.copy()
@@ -50,6 +60,9 @@ def check_ik_model(solver, model, state, side, fingers, wrist_ids, base):
             # Native task-site orientation is a half turn around distal Z.
             expected = state.body(f"{side}_{digit}_DP").xmat.reshape(3, 3) @ np.diag([-1, -1, 1])
             np.testing.assert_allclose(pose.rotation, expected, atol=2e-6, rtol=0)
+    # The native solver reuses Pinocchio's cached transforms on its first
+    # iteration. A geometry check must not change that initialization.
+    solver.configuration.update(original_q)
     return max_error
 
 
@@ -75,29 +88,42 @@ def features(output, mano_root, device):
             if digest(source) != next(a["sha256"] for a in ref["mano"]["assets"] if a["name"] == source.name):
                 raise ValueError(f"MANO asset differs from common input: {source}")
             (models / source.name).symlink_to(source.resolve())
-        mano = MANO(temporary, device=torch.device(device), flat_hand_mean=False, center_idx=None)
+        oakink = ref["dataset"] == "oakink2"
+        mano = MANO(temporary, device=torch.device(device),
+                    flat_hand_mean=ref["mano"]["flat_hand_mean"],
+                    center_idx=0 if ref["mano"].get("wrist_recentered") else None)
     count = len(arrays["time_s"])
     # Bench's MANO16 + five tips -> the native wrist/finger-chain order.
     order = [0, 13, 14, 15, 16, 1, 2, 3, 17, 4, 5, 6, 18, 10, 11, 12, 19, 7, 8, 9, 20]
     sampled = []
-    for i, part in enumerate(("bottom", "top")):
+    parts = ref["object_geometry"]["part_order"]
+    for i, part in enumerate(parts):
         mesh = trimesh.load(output / "human" / scene["resources"][part]["visual"], force="mesh", process=False)
         points, faces = trimesh.sample.sample_surface_even(mesh, 4096, seed=1 + i)
         sampled.append((points, -mesh.face_normals[faces]))
     result = {}
-    checks = {"surface_samples_per_part": [len(points) for points, _ in sampled], "surface_seeds": [1, 2]}
+    checks = {"surface_samples_per_part": [len(points) for points, _ in sampled],
+              "surface_seeds": list(range(1, len(parts) + 1))}
     for side in SIDES:
 
         def tensor(value):
             return torch.as_tensor(value, dtype=torch.float32, device=device)
 
+        if oakink:
+            rotations = Rotation.from_quat(arrays[f"{side}_mano_quat"].reshape(-1, 4)[:, [1, 2, 3, 0]])
+            pose = rotations.as_rotvec().reshape(count, 48)
+            # Both positions and native joint axes must use the benchmark world.
+            world = np.asarray(ref["coordinates"]["source_to_benchmark"])[:3, :3]
+            pose[:, :3] = (Rotation.from_matrix(world) * Rotation.from_rotvec(pose[:, :3])).as_rotvec()
+            orient, fingers = pose[:, :3], pose[:, 3:]
+            trans = arrays[f"{side}_mano_trans"] @ world.T
+        else:
+            orient, fingers, trans = (arrays[f"{side}_mano_{key}"] for key in ("rot", "pose", "trans"))
         with torch.no_grad():
             decoded = mano.forward(
                 side,
                 tensor(arrays[f"{side}_mano_shape"]),
-                tensor(arrays[f"{side}_mano_rot"]),
-                tensor(arrays[f"{side}_mano_trans"]),
-                tensor(arrays[f"{side}_mano_pose"]),
+                tensor(orient), tensor(trans), tensor(fingers),
             )
         joints = decoded["joints"].cpu().numpy()
         differences = np.linalg.norm(joints - arrays[f"{side}_joints_m"][:, order], axis=-1)
@@ -176,23 +202,25 @@ def ik(output):
 
     output = Path(output)
     _, ref, scene, arrays = human_bundle(output / "human")
+    settings = ik_settings(ref["dataset"])
     _, semantics, _ = robot_bundle(output / "robot")
     with np.load(output / "features.npz", allow_pickle=False) as data:
         features = dict(data)
     model = mujoco.MjModel.from_xml_path(str(output / "assets" / "robot.xml"))
     state = mujoco.MjData(model)
+    parts = ref["object_geometry"]["part_order"]
     cells = {
         "fps": 30.0,
         "sequence_id": f"{ref['subject']}/{ref['sequence']}",
         "robot_name": "sharpa_wave",
-        "source_dataset": "arctic",
+        "source_dataset": ref["dataset"],
         "object_name": ref["object"],
-        "object_body_names": ["bottom", "top"],
+        "object_body_names": parts,
         "object_body_position": arrays["part_pos_m"].tolist(),
         "object_body_wxyz": arrays["part_quat_wxyz"].tolist(),
-        "object_articulation": arrays["object_hinge_rad"].tolist(),
+        "object_articulation": arrays["object_hinge_rad"].tolist() if "object_hinge_rad" in arrays else [],
         "object_urdf_paths": [],
-        "object_mesh_paths": [str(Path("human") / scene["resources"][p]["visual"]) for p in ("bottom", "top")],
+        "object_mesh_paths": [str(Path("human") / scene["resources"][p]["visual"]) for p in parts],
     }
     cells["object_mesh_radius"] = [
         float(np.max(np.linalg.norm(trimesh.load(output / p, force="mesh").vertices, axis=-1)))
@@ -226,17 +254,18 @@ def ik(output):
                 pos, quat = wrist_pose_from_mano_joint0(
                     features[f"{side}_joints"][t, 0],
                     features[f"{side}_joints_wxyz"][t, 0],
-                    link_to_site_quat_xyzw=np.array([-0.5, 0.5, 0.5, 0.5]),
+                    link_to_site_quat_xyzw=settings["wrist_offset_xyzw"],
                 )
                 q = solver.robot.q0.copy()
                 q[:3] = pos
                 q[3:7] = quat
             try:
                 result = solver.compute(
-                    features[f"{side}_joints"][t], features[f"{side}_joints_wxyz"][t], source_to_robot_scale=1.0, qpos=q
+                    features[f"{side}_joints"][t], features[f"{side}_joints_wxyz"][t],
+                    source_to_robot_scale=settings["mano_to_robot_scale"], qpos=q
                 )
             except Exception as error:
-                raise RuntimeError(f"IK failed for {side}, source frame {arrays['source_frame'][t]}") from error
+                raise RuntimeError(f"IK failed for {side}, output frame {t}, source time {arrays['source_time_s'][t]}") from error
             q = result["q"]
             wrist = wrist_coordinates(q[:3], q[[6, 3, 4, 5]], base, previous)
             previous = wrist[3:]
@@ -268,6 +297,7 @@ def ik(output):
         for key, source in (("positions", "pos"), ("normals", "normal"), ("part_ids", "id")):
             cells[f"mano_{side}_object_contact_{key}"] = features[f"{side}_contact_{source}"].tolist()
         report[side] = {
+            **settings,
             "fk_max_error_m": fk_error,
             "frame_task_names": list(solver.frame_tasks),
             "frame_task_errors_m": errors,
@@ -278,7 +308,7 @@ def ik(output):
     if invalid.any():
         frame, joint = np.argwhere(invalid)[0]
         raise ValueError(
-            f"Invalid IK at source frame {arrays['source_frame'][frame]}, "
+            f"Invalid IK at source time {arrays['source_time_s'][frame]}, "
             f"{semantics['joint_names'][joint]}={joint_q[frame, joint]}"
         )
     pq.write_table(pa.Table.from_pylist([cells]), output / "processed.parquet")
@@ -325,6 +355,12 @@ def seal(output):
     for name in ("processed.parquet", "robot_reference.npz", "checks/mano.json", "checks/ik.json"):
         if not (output / name).is_file():
             raise ValueError(f"Incomplete preparation: {name}")
+    from .inputs import read_json
+
+    settings = ik_settings(ref["dataset"])
+    ik_report = read_json(output / "checks/ik.json")
+    if any(ik_report[side].get(key) != value for side in SIDES for key, value in settings.items()):
+        raise ValueError("IK settings differ from the selected dataset recipe; rerun IK before sealing")
     binding = {
         "format": FORMAT,
         "robot_name": ROBOT,
@@ -337,11 +373,11 @@ def seal(output):
         "method": {
             "contact_threshold_m": 0.01,
             "requested_surface_samples_per_part": 4096,
-            "surface_seeds": [1, 2],
+            "surface_seeds": list(range(1, len(ref['object_geometry']['part_order']) + 1)),
             "ik_max_iter": 100,
             "ik_frequency": 200.0,
             "ik_convergence_threshold": 1e-6,
-            "mano_to_robot_scale": 1.0,
+            **settings,
         },
         "files": {
             str(p.relative_to(output)): digest(p)

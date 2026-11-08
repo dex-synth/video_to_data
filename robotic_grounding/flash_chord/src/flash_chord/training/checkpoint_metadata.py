@@ -100,6 +100,8 @@ def resolved_reference_config(reference: Reference, parquet: str) -> dict[str, o
         "parquet": str(parquet),
         "num_frames": reference.num_frames,
         "playback_fps": reference.fps,
+        **({"sample_times_s": reference.sample_times_s.tolist()}
+           if hasattr(reference, "sample_times_s") else {}),
         "object_articulations": _object_articulation_config(reference),
     }
 

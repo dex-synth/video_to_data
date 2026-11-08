@@ -113,8 +113,12 @@ def validate_geometry(actual, robot, source):
             else named_id(actual, "body", "support")
         )
         close(actual.geom_bodyid[ag], expected_body, label + ".body")
-        for field in ("type", "pos", "size"):
+        for field in ("type", "pos"):
             close(getattr(actual, "geom_" + field)[ag], getattr(model, "geom_" + field)[g], label + "." + field)
+        # MuJoCo capsules use radius and half-length only. Newton also fills
+        # size[2] with the radius; that unused slot does not change the shape.
+        size_count = 2 if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_CAPSULE else 3
+        close(actual.geom_size[ag, :size_count], model.geom_size[g, :size_count], label + ".size")
         close(abs(np.dot(actual.geom_quat[ag], model.geom_quat[g])), 1, label + ".orientation")
         if model.geom_type[g] == mujoco.mjtGeom.mjGEOM_MESH:
             a = mesh_hull(actual, actual.geom_dataid[ag])

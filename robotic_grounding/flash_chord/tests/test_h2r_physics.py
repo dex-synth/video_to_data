@@ -33,7 +33,7 @@ def physics():
         "env.voc.max_force=0", "env.voc.max_torque=0", "logging.mode=disabled",
     ])
     with wp.ScopedDevice("cuda:0"):
-        reference = load_h2r(binding)
+        reference = load_h2r(binding, control_fps=cfg.env.sim.fps)
         scene = build_h2r_scene(reference, H2rSharpaHands(binding), 1, CollisionPolicy(ground=False))
         env = RLEnv(scene, reference, instantiate_typed(cfg.env, RLEnvConfig))
     return env, mujoco.MjModel.from_xml_path(scene_path), binding
@@ -122,7 +122,7 @@ def test_same_initial_state_and_targets_in_common_physics(physics):
     assert contacts_seen > 0
     # The imported float32 mesh/FK model need not choose identical contact
     # manifolds. Bound short-horizon motion independently of the tight servo check.
-    assert max(position_errors) < 1e-3  # 1 mm over 16 physics steps
+    assert max(position_errors) < 1e-3  # 1 mm over four control intervals
     assert max(rotation_errors) < 5e-3  # 0.29 degrees
 
 
@@ -149,6 +149,7 @@ def test_masked_reset_discards_solver_and_contact_history(physics):
         with wp.ScopedCapture() as capture:
             env.reset(reset_frame=frame, reset_mask=mask)
         wp.capture_launch(capture.graph)
+        env.check_reset_validity(mask)
         for buffer in buffers:
             values = buffer.numpy()
             np.testing.assert_array_equal(values[0], 0)
@@ -161,6 +162,21 @@ def test_masked_reset_discards_solver_and_contact_history(physics):
         np.testing.assert_array_equal(env.state_0.joint_q.numpy(), initial_q)
         mask.assign([0, 1])
         wp.capture_launch(capture.graph)
+        env.check_reset_validity(mask)
+        # Poison the reference table so replay must produce a failed reset.
+        table = env.reset_table.ref_joint_q.numpy()
+        poisoned = table.copy()
+        poisoned[0, 0] = float("nan")
+        env.reset_table.ref_joint_q.assign(poisoned)
+        wp.capture_launch(capture.graph)
+        with pytest.raises(RuntimeError, match=r"worlds \[1\]"):
+            env.check_reset_validity(mask)
+        env.check_reset_validity(wp.array([1, 0], dtype=wp.int32))
+        with pytest.raises(RuntimeError, match=r"worlds \[1\]"):
+            env.reset(reset_frame=frame, reset_mask=mask)
+        env.reset_table.ref_joint_q.assign(table)
+        wp.capture_launch(capture.graph)
+        env.check_reset_validity(mask)
         env.step(wp.zeros(2 * env.action.action_dim, dtype=wp.float32))
         assert np.isfinite(env.state_0.joint_q.numpy()).all()
 
