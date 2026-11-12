@@ -9,6 +9,70 @@ import pytest
 pytestmark = pytest.mark.gpu
 
 
+def test_joint_limit_termination_reaches_reward_and_survives_auto_reset(h2r_binding, h2r_config, monkeypatch):
+    import warp as wp
+    from flash_chord.configuration import instantiate_typed
+    from flash_chord.envs.rl import RLEnv, RLEnvConfig
+    from flash_chord.h2r.robot import H2rSharpaHands
+    from flash_chord.scene.collision import CollisionPolicy
+    from flash_chord.scene.setup import setup_scene
+
+    @wp.kernel
+    def inject_joint_position(q: wp.array(dtype=wp.float32), index: int, value: float):
+        q[index] = value
+
+    with wp.ScopedDevice("cuda:0"):
+        config = h2r_config(
+            "env.auto_reset=true", "env.capture_terminal_state=true",
+            "env.state_validity.joint_position_limit_mode=terminate",
+            "termination.wrist_position.enabled=false", "termination.object_position.enabled=false",
+            "termination.object_orientation.enabled=false",
+        )
+        setup = setup_scene(parquet=h2r_binding, control_fps=20, motion_speed=1,
+                            embodiment=H2rSharpaHands(h2r_binding), collision=CollisionPolicy(ground=False),
+                            world_count=2, include_support=True, decompose_objects=False)
+        env = RLEnv(setup.scene, setup.reference, config=instantiate_typed(config.env, RLEnvConfig))
+        joint = next(i for i, name in enumerate(env.model.joint_label) if name.endswith("right_pinky_CMC"))
+        q_index = int(env.model.joint_q_start.numpy()[joint])
+        d_index = int(env.model.joint_qd_start.numpy()[joint])
+        lower = env.model.joint_limit_lower.numpy()[d_index]
+        upper = env.model.joint_limit_upper.numpy()[d_index]
+        beyond = float(upper + 0.5 * (upper - lower) + 0.05)
+        original_check = env.state_validity.check
+
+        def inject_at_transition_boundary(state, reason):
+            if reason is env.transition_invalid_reason:
+                wp.launch(inject_joint_position, dim=1, inputs=[state.joint_q, q_index, beyond])
+            original_check(state, reason)
+
+        monkeypatch.setattr(env.state_validity, "check", inject_at_transition_boundary)
+        action = wp.zeros(2 * env.action.action_dim)
+        env.reset(frame_id=0)
+        env.step(action)
+
+        def assert_learnable_terminal():
+            assert env.done.numpy()[0] == 1
+            assert env.transition_valid.numpy()[0] == 1
+            assert env.transition_invalid_reason.numpy()[0] == 0
+            assert env.joint_limit_terminated.numpy()[0] == 1
+            assert env.reset_mask.numpy()[0] == 1
+            assert env.reset_invalid_reason.numpy()[0] == 0
+            assert env.state_0.joint_q.numpy()[q_index] <= upper + 0.5 * (upper - lower)
+            terms = env.objective.terms.numpy().reshape(2, -1)
+            index = env.objective.term_names.index("termination")
+            assert terms[0, index] == 1
+            weights = env.objective.weights.numpy()
+            assert weights[index] == -100
+            np.testing.assert_allclose(env.reward.numpy()[0], env.frame_dt * (terms[0] @ weights), rtol=1e-5)
+
+        assert_learnable_terminal()
+        env.reset(frame_id=0)
+        env.capture_step()
+        env.reset(frame_id=0)
+        env.step()
+        assert_learnable_terminal()
+
+
 def _build_h2r_rl_env(h2r_setup, h2r_config, *extra_overrides):
     from flash_chord.configuration import instantiate_typed
     from flash_chord.envs.rl import RLEnv, RLEnvConfig

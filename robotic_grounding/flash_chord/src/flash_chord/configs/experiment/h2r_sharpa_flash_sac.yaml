@@ -46,6 +46,8 @@ env:
     max_body_displacement_m: 10.0
     max_linear_speed_m_s: 20.0
     max_angular_speed_rad_s: 200.0
+    # ignore | discard (invalid sample) | terminate (learn from terminal penalty).
+    joint_position_limit_mode: terminate
     joint_range_margin_fraction: 0.5
 training:
   total_environment_steps: 250003456

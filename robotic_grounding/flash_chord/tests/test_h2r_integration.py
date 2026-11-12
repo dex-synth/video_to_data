@@ -216,3 +216,23 @@ def test_resume_requires_the_saved_training_clock(binding, monkeypatch, fps, sub
     cfg.training.checkpoint_path = "/tmp/policy30.safetensors"
     with pytest.raises(ValueError, match=message):
         main(cfg)
+
+
+@pytest.mark.parametrize("saved_mode,message", [
+    (None, "joint_position_limit_mode is discard"),
+    ("ignore", "joint_position_limit_mode is ignore"),
+])
+def test_resume_requires_the_saved_joint_limit_mode(binding, monkeypatch, saved_mode, message):
+    cfg = compose_config("train_flash_sac", [f"task.parquet={binding}"])
+    saved = resolved_dict(cfg)
+    if saved_mode is None:  # Checkpoint written before the option existed.
+        del saved["env"]["state_validity"]["joint_position_limit_mode"]
+    else:
+        saved["env"]["state_validity"]["joint_position_limit_mode"] = saved_mode
+    metadata = {"resolved_config_json": json.dumps(saved)}
+    main = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/train_flash_sac.py"))["main"].__wrapped__
+    monkeypatch.setitem(main.__globals__, "read_checkpoint_metadata", lambda _: metadata)
+    cfg.training.resume = True
+    cfg.training.checkpoint_path = "/tmp/policy.safetensors"
+    with pytest.raises(ValueError, match=message):
+        main(cfg)

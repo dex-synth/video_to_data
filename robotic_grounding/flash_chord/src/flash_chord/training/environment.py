@@ -101,6 +101,11 @@ class WarpRLEnv:
             self._packed_termination_diagnostics = termination.packed_diagnostics
         else:
             self._packed_termination_diagnostics = None
+        self._base_termination_cause_count = len(self.termination_cause_names)
+        self._joint_limit_terminated = getattr(env, "joint_limit_terminated", None)
+        if self._joint_limit_terminated is not None:
+            self.termination_cause_names += ("joint_position_limit",)
+            self._termination_cause_arrays += (self._joint_limit_terminated,)
         self._episode_reference_progress_array = getattr(env, "episode_reference_progress", None)
         self.critic_context_names = tuple(getattr(env, "critic_context_names", ()))
         self.critic_context_dim = len(self.critic_context_names)
@@ -219,18 +224,23 @@ class WarpRLEnv:
         return termination_causes, tracking_errors
 
     def transition_logging_inputs(self) -> tuple[jax.Array, jax.Array]:
-        """Return stream-ordered zero-copy inputs for the compiled logging-window reduction."""
+        """Return stream-ordered diagnostics, including optional joint-limit termination."""
         if self._episode_reference_progress_array is None:
             raise RuntimeError("environment does not expose completed-episode reference progress")
         if self._packed_termination_diagnostics is None:
             raise RuntimeError("environment termination does not expose packed diagnostics")
-        diagnostic_width = len(self.termination_cause_names) + len(self.tracking_error_names)
+        cause_count = self._base_termination_cause_count
+        diagnostic_width = cause_count + len(self.tracking_error_names)
+        diagnostics = to_jax(self._packed_termination_diagnostics, (self.world_count, diagnostic_width))
+        if self._joint_limit_terminated is not None:
+            diagnostics = jnp.concatenate((
+                diagnostics[:, :cause_count],
+                to_jax(self._joint_limit_terminated).astype(jnp.float32)[:, None],
+                diagnostics[:, cause_count:],
+            ), axis=1)
         return (
             to_jax(self._episode_reference_progress_array, (self.world_count,)),
-            to_jax(
-                self._packed_termination_diagnostics,
-                (self.world_count, diagnostic_width),
-            ),
+            diagnostics,
         )
 
     def set_curriculum(self, stage: CurriculumStage) -> None:

@@ -343,10 +343,14 @@ class BaseEnv:
         self.solver.update_contacts(self.contacts, self.state_0)
         if self.contact is not None:
             self.contact.update(self.model, self.state_0, self.contacts)
-        self.termination.evaluate(self.state_0.body_q, self.timestep)
+        self._evaluate_termination()
         if self.objective is not None:
             self.objective.evaluate(self.state_0, self.timestep, self.terminated)
         self._advance_lifecycle()
+
+    def _evaluate_termination(self) -> None:
+        """Set terminal flags before computing the transition's objective."""
+        self.termination.evaluate(self.state_0.body_q, self.timestep)
 
     def _advance_lifecycle(self) -> None:
         """Advance the default reference and episode counters after one transition."""

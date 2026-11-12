@@ -17,6 +17,27 @@ from flash_chord.visualization.viewer import ViewerConfig
 _BINDING = "task.parquet=/tmp/h2r_binding.json"
 
 
+@pytest.mark.parametrize("override,expected", [(None, "terminate"), ("ignore", "ignore"),
+                                               ("discard", "discard"), ("terminate", "terminate")])
+def test_joint_position_limit_mode(override, expected):
+    from flash_chord.envs.validity import StateValidityConfig
+
+    overrides = [_BINDING]
+    if override is not None:
+        overrides.append(f"env.state_validity.joint_position_limit_mode={override}")
+    config = compose_config("train_flash_sac", overrides)
+    validity = instantiate_typed(config.env.state_validity, StateValidityConfig)
+    assert validity.joint_position_limit_mode == expected
+    assert validity.joint_range_margin_fraction == 0.5
+
+
+def test_joint_position_limit_mode_rejects_unknown_values():
+    from flash_chord.envs.validity import StateValidityConfig
+
+    with pytest.raises(ValueError, match="joint_position_limit_mode"):
+        StateValidityConfig(joint_position_limit_mode="typo")
+
+
 def test_default_is_the_complete_h2r_recipe():
     config = compose_config("train_flash_sac", [_BINDING])
     explicit = compose_config("train_flash_sac", ["experiment=h2r_sharpa_flash_sac", _BINDING])

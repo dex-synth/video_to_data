@@ -92,6 +92,34 @@ def _scalar_transition(jnp, observation, action, term, terminated=False, truncat
     )
 
 
+@pytest.mark.parametrize("mode", ["ignore", "discard", "terminate"])
+def test_joint_limit_modes_preserve_or_discard_terminal_n_step_samples(mode):
+    _, jnp = _dependencies()
+    from flash_chord.training.flash_sac.replay import create_replay, insert_replay
+
+    spec = _spec(world_count=1, objective_term_count=1, batch_size=1, minimum_size=1)
+    state = create_replay(spec)
+    for step in range(5):
+        failed = step == 2
+        done = failed and mode != "ignore"
+        term = -5.0 if failed and mode == "terminate" else (1000.0 if step > 2 else 0.0)
+        transition = _scalar_transition(jnp, step, 0, term, terminated=done).replace(
+            valid=jnp.asarray([not (failed and mode == "discard")]))
+        state = insert_replay(state, transition)
+    if mode == "discard":
+        assert int(state.size) == 0
+    else:
+        assert int(state.size) == 3
+        if mode == "terminate":
+            # All three samples end at the failure, without bootstrapping or reset rewards.
+            np.testing.assert_array_equal(np.asarray(state.storage.terminated[:3]), True)
+            np.testing.assert_allclose(np.asarray(state.storage.discounted_objective_terms[:3, 0]),
+                                       [-5 * 0.9**2, -5 * 0.9, -5], rtol=1e-6)
+        else:
+            np.testing.assert_array_equal(np.asarray(state.storage.terminated[:3]), False)
+            assert float(state.storage.discounted_objective_terms[2, 0]) > 0
+
+
 def test_mixer_memory_accounting_and_allocation_shapes_are_exact():
     _, jnp = _dependencies()
 

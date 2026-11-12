@@ -6,6 +6,34 @@ import numpy as np
 import pytest
 
 
+def test_joint_limit_cause_is_inserted_before_tracking_errors():
+    from types import SimpleNamespace
+    import warp as wp
+    from flash_chord.training.environment import WarpRLEnv
+
+    with wp.ScopedDevice("cpu"):
+        wrist = wp.array([0, 1], dtype=wp.int32)
+        obj = wp.array([0, 0], dtype=wp.int32)
+        joint = wp.array([1, 0], dtype=wp.int32)
+        error = wp.array([0.1, 0.2])
+        termination = SimpleNamespace(
+            cause_names=("wrist", "object"), cause_arrays=(wrist, obj),
+            error_names=("error",), error_arrays=(error,),
+            packed_diagnostic_names=("wrist", "object", "error"),
+            packed_diagnostics=wp.array([0., 0., 0.1, 1., 0., 0.2]),
+        )
+        env = SimpleNamespace(world_count=2, observation_dim=1, action=SimpleNamespace(action_dim=1),
+                              termination=termination, joint_limit_terminated=joint,
+                              episode_reference_progress=wp.zeros(2))
+        adapter = WarpRLEnv(env)
+        assert adapter.termination_cause_names == ("wrist", "object", "joint_position_limit")
+        _, diagnostics = adapter.transition_logging_inputs()
+        np.testing.assert_allclose(np.asarray(diagnostics), [[0, 0, 1, 0.1], [1, 0, 0, 0.2]])
+        causes, errors = adapter.transition_diagnostics()
+        np.testing.assert_array_equal(np.asarray(causes), [[0, 0, 1], [1, 0, 0]])
+        np.testing.assert_allclose(np.asarray(errors), [[0.1], [0.2]])
+
+
 def _dependencies():
     jax = pytest.importorskip("jax")
     jnp = pytest.importorskip("jax.numpy")

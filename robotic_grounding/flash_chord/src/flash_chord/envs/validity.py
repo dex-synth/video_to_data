@@ -3,9 +3,16 @@
 
 import math
 from dataclasses import dataclass
+from typing import Literal, get_args
 
 import newton
 import warp as wp
+
+
+# Invalid-reason bit for scalar joint position; ``terminate`` mode reroutes it in RLEnv.
+JOINT_POSITION_BIT = wp.constant(16)
+
+JointPositionLimitMode = Literal["ignore", "discard", "terminate"]
 
 
 @dataclass(frozen=True)
@@ -16,9 +23,14 @@ class StateValidityConfig:
     max_linear_speed_m_s: float = 20.0
     max_angular_speed_rad_s: float = 200.0
     joint_range_margin_fraction: float = 0.5
+    joint_position_limit_mode: JointPositionLimitMode = "terminate"
 
     def __post_init__(self):
-        for name, value in vars(self).items():
+        if self.joint_position_limit_mode not in get_args(JointPositionLimitMode):
+            raise ValueError("joint_position_limit_mode must be ignore, discard, or terminate")
+        for name in ("max_body_displacement_m", "max_linear_speed_m_s", "max_angular_speed_rad_s",
+                     "joint_range_margin_fraction"):
+            value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
 
@@ -41,6 +53,7 @@ def check_state(
     max_displacement: float,
     max_linear_speed: float,
     max_angular_speed: float,
+    check_joint_position_limits: bool,
     reason: wp.array(dtype=wp.int32),
 ):
     world = wp.tid()
@@ -75,8 +88,8 @@ def check_state(
     for i in range(q_ids.shape[0]):
         q = joint_q[world * coordinates + q_ids[i]]
         velocity = joint_qd[world * dofs + dof_ids[i]]
-        if q < lower[i] or q > upper[i]:
-            failed = failed | 16
+        if check_joint_position_limits and (q < lower[i] or q > upper[i]):
+            failed = failed | JOINT_POSITION_BIT
         if wp.abs(velocity) > speed[i]:
             failed = failed | 32
     reason[world] = failed
@@ -120,4 +133,5 @@ class StateValidity:
             state.body_q, state.body_qd, self.model.body_q, state.joint_q, state.joint_qd, *self.arrays,
             self.bodies, self.coordinates, self.dofs, self.config.max_body_displacement_m,
             self.config.max_linear_speed_m_s, self.config.max_angular_speed_rad_s,
+            self.config.joint_position_limit_mode != "ignore",
         ], outputs=[reason])

@@ -18,7 +18,7 @@ from flash_chord.envs.observation import (
     ObservationSpec,
     PolicyObservationConfig,
 )
-from flash_chord.envs.validity import StateValidity, StateValidityConfig
+from flash_chord.envs.validity import JOINT_POSITION_BIT, StateValidity, StateValidityConfig
 from flash_chord.lifecycle.reset import (
     RESET_CONTEXT_NAMES,
     FirstFrameResetCurriculum,
@@ -162,6 +162,21 @@ def check_transition_finite(
         finite = finite and wp.isfinite(terms[w * term_count + i])
     if not finite:
         invalid_reason[w] = invalid_reason[w] | 1
+
+
+@wp.kernel
+def apply_joint_limit_termination(
+    reason: wp.array(dtype=wp.int32),
+    terminated: wp.array(dtype=wp.int32),
+    joint_limit_terminated: wp.array(dtype=wp.int32),
+):
+    """Route joint-position failure to the task terminal reward, retaining other invalid bits."""
+    world = wp.tid()
+    joint_failure = (reason[world] & JOINT_POSITION_BIT) != 0
+    reason[world] = reason[world] & ~JOINT_POSITION_BIT
+    joint_limit_terminated[world] = int(joint_failure and reason[world] == 0)
+    if joint_failure:
+        terminated[world] = 1
 
 
 @wp.kernel
@@ -388,6 +403,11 @@ class RLEnv(BaseEnv):
             StateValidity(self.model, self.world_count, config.state_validity, self.device)
             if config.state_validity is not None else None
         )
+        self.joint_limit_terminated = (
+            wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
+            if config.state_validity is not None
+            and config.state_validity.joint_position_limit_mode == "terminate" else None
+        )
         self.running_return = wp.zeros(self.world_count, dtype=wp.float32, device=self.device)
         self.running_length = wp.zeros(self.world_count, dtype=wp.int32, device=self.device)
         self.episode_return = wp.zeros(self.world_count, dtype=wp.float32, device=self.device)
@@ -472,11 +492,19 @@ class RLEnv(BaseEnv):
         if bad.any():
             raise RuntimeError(f"Invalid physical state after reset in worlds {np.flatnonzero(bad).tolist()}")
 
-    def _rl_step(self) -> None:
-        self._transition()
+    def _evaluate_termination(self) -> None:
+        super()._evaluate_termination()
         self.transition_invalid_reason.zero_()
         if self.state_validity is not None:
             self.state_validity.check(self.state_0, self.transition_invalid_reason)
+        if self.joint_limit_terminated is not None:
+            wp.launch(
+                apply_joint_limit_termination, dim=self.world_count,
+                inputs=[self.transition_invalid_reason, self.terminated, self.joint_limit_terminated],
+            )
+
+    def _rl_step(self) -> None:
+        self._transition()
         if self.config.capture_terminal_state:
             self.observation_strategy.compute_into(self.state_0, self.terminal_observation)
             self._compute_critic_context(self.state_0, self.terminal_critic_context)

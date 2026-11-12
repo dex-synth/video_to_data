@@ -50,6 +50,13 @@ def main(cfg: DictConfig) -> None:
             raise ValueError("H2R checkpoint control frequency differs; select its 20/30 Hz recipe explicitly")
         if binding is not None and saved["env"]["sim"]["substeps"] != cfg.env.sim.substeps:
             raise ValueError("H2R checkpoint physics substeps differ; select its saved sim.substeps explicitly")
+        saved_validity, validity = saved["env"].get("state_validity"), cfg.env.get("state_validity")
+        if saved_validity is not None and validity is not None:
+            # Checkpoints saved before this option always discarded joint-limit failures.
+            saved_mode = saved_validity.get("joint_position_limit_mode", "discard")
+            if saved_mode != validity.joint_position_limit_mode:
+                raise ValueError(f"Checkpoint joint_position_limit_mode is {saved_mode}; "
+                                 f"set env.state_validity.joint_position_limit_mode={saved_mode} explicitly")
     env_config = instantiate_typed(cfg.env, RLEnvConfig)
     embodiment = instantiate_typed(cfg.embodiment, Embodiment)
     collision = instantiate_typed(cfg.collision, CollisionPolicy)
