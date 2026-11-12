@@ -24,6 +24,8 @@ H2R 配方使用 **20 Hz 控制、6 个物理子步、120 Hz 物理、1× 示范
 
 正式共同 rollout 与指标由 bench 执行。准备产物、训练输出和检查记录放在代码目录外；不要删除 checkpoint 仍引用的 prepared 目录或修改其中的封存文件。
 
+ARCTIC 输入检查接受 `h2r-preprocess-v3` 物理包，核对 `bottom/top`、自由根、单铰链与共同有限桌面的显式绑定，并校验桌面位置和尺寸与封存 recipe 一致。额外环境物体仍会拒绝；这一格式兼容不替代各输入的模型与实际 rollout 检查。
+
 ## OakInk2 输入
 
 同一准备入口接受已通过准入的 `h2r-preprocess-v2` 或 `h2r-preprocess-v3`／`oakink2-quality-v2` 物理包。当前范围为独立刚体：每个参考部件对应一个自由根；尚不支持 OakInk2 铰接物体、额外固定物体或桌面以外的支撑代理，遇到这些输入会明确拒绝。v3 额外核对 `interaction_objects` 中每个部件的自由根绑定，并要求 `environment` 仅包含共同有限桌面；资产仍从封存的 `scene.xml` 导入。保留原有碰撞分解、原生碰撞体和有限桌面，不在方法侧重新裁剪、去噪或采样。

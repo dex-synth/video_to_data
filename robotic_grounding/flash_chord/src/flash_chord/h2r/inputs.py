@@ -74,6 +74,36 @@ def validate_oakink_v3(scene, reference):
         raise ValueError("Unsupported canonical OakInk2 table binding")
 
 
+def validate_arctic_v3(scene, reference):
+    """Accept the canonical two-part hinge and finite table ARCTIC contract."""
+    parts = ["bottom", "top"]
+    if (reference["object_geometry"]["part_order"] != parts
+            or set(scene["parts"]) != set(parts) or set(scene["resources"]) != set(parts)
+            or scene["scoring_parts"] != parts
+            or set(scene["interaction_objects"]) != {scene["object"]}):
+        raise ValueError("ARCTIC interaction objects differ from the two-part reference")
+    obj = scene["interaction_objects"][scene["object"]]
+    expected_joint = {**scene["joint"], "type": "hinge", "parent": "bottom", "child": "top",
+                      "rest_pos_m": [0., 0., 0.], "rest_quat_wxyz": [1., 0., 0., 0.],
+                      "mjcf_name": "object_hinge", "reference_key": "object_hinge_rad"}
+    if (obj["parts"] != {"bottom": "object_bottom", "top": "object_top"}
+            or obj["root"] != {"part": "bottom", "body": "object_bottom",
+                               "joint": "object_free", "motion": "free"}
+            or obj["joints"] != {"top_hinge": expected_joint}):
+        raise ValueError("Unsupported canonical ARCTIC articulated object binding")
+    if set(scene["environment"]) != {"table"}:
+        raise ValueError("ARCTIC requires the common finite table without extra environment bodies")
+    table = scene["environment"]["table"]
+    authored = scene["recipe"]["scene"]["table"]
+    if (table["body"] != "world" or table["shape"] != "box"
+            or table["collision_geoms"] != ["table"] or table["contact_role"] != "table"
+            or table["quat_wxyz"] != [1., 0., 0., 0.]
+            or table["contact"] != scene["settings"]["contact"]
+            or table["pos_m"] != [*authored["center_xy_m"], authored["height_m"] - authored["thickness_m"] / 2]
+            or table["size_m"] != [*authored["size_xy_m"], authored["thickness_m"]]):
+        raise ValueError("Unsupported canonical ARCTIC table binding")
+
+
 def human_bundle(path):
     path = Path(path).resolve()
     manifest = read_json(path / "bundle.json")
@@ -92,9 +122,14 @@ def human_bundle(path):
         raise ValueError("H2R input must retain 30 Hz and 1x speed")
     oakink = reference["dataset"] == "oakink2"
     if manifest["format"] == "h2r-preprocess-v3":
-        if not oakink or manifest.get("kind") != "physical" or scene["format"] != manifest["format"]:
-            raise ValueError("H2R v3 currently requires a physical OakInk2 scene")
-        validate_oakink_v3(scene, reference)
+        if manifest.get("kind") != "physical" or scene["format"] != manifest["format"]:
+            raise ValueError("H2R v3 requires a physical scene")
+        if oakink:
+            validate_oakink_v3(scene, reference)
+        elif reference["dataset"] == "arctic":
+            validate_arctic_v3(scene, reference)
+        else:
+            raise ValueError("H2R v3 currently supports ARCTIC and OakInk2 only")
     if not oakink and reference["object_geometry"]["part_order"] != ["bottom", "top"]:
         raise ValueError("Only the two-part ARCTIC contract is supported")
     with np.load(path / "reference.npz", allow_pickle=False) as data:
