@@ -17,6 +17,8 @@ from dataclasses import dataclass
 import newton
 import warp as wp
 
+from flash_chord.h2r.inputs import TRAINING_CLOCKS
+
 
 @dataclass
 class SimConfig:
@@ -66,9 +68,11 @@ def build_solver(model, cfg: SimConfig):
     }
     settings = getattr(model, "h2r_settings", None)
     if settings is not None:
-        if abs(cfg.sim_dt - settings["timestep_s"]) > 1e-12 or cfg.fps not in (20, 30) or not cfg.use_mujoco_contacts:
-            raise ValueError("H2R requires 20/30 Hz control, its exact physical timestep and MuJoCo contacts")
-        # The common task owns physics settings; the method owns buffer capacity.
+        if (cfg.fps, cfg.substeps) not in TRAINING_CLOCKS or not cfg.use_mujoco_contacts:
+            raise ValueError("H2R requires 20/5 training clock (historical: 20/6 or 30/4) and MuJoCo contacts")
+        # Training uses its saved integration clock, independently of the sealed
+        # task's evaluation timestep. All other common physics settings remain.
+        # The environment passes cfg.sim_dt to every solver.step call.
         options.update({name: settings[name] for name in (*options, "tolerance")})
         for name in ("solver", "integrator", "cone"):
             options[name] = options[name].lower()

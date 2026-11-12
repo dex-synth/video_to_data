@@ -12,6 +12,8 @@ FORMAT = "flashchord-h2r-v1"
 SIDES = ("left", "right")
 DIGITS = ("thumb", "index", "middle", "ring", "pinky")
 WRIST = ("x", "y", "z", "roll", "pitch", "yaw")
+# (control Hz, physics substeps): default 20/5 (100 Hz); 20/6 and 30/4 (120 Hz) are historical.
+TRAINING_CLOCKS = ((20, 5), (20, 6), (30, 4))
 
 
 def read_json(path):

@@ -65,9 +65,15 @@ def test_fixed_support_and_active_solver_guards(physics):
 
 
 def test_same_initial_state_and_targets_in_common_physics(physics):
+    from copy import deepcopy
+
     import mujoco_warp as mjwarp
 
     env, common, _ = physics
+    # Compare asset import at the training timestep. The sealed evaluation
+    # model keeps its own timestep and is not changed by this local copy.
+    common = deepcopy(common)
+    common.opt.timestep = env.config.sim.sim_dt
     env.reset(frame_id=0)
     data = mujoco.MjData(common)
     layout = env.scene.layout.scalar_joints
@@ -124,6 +130,23 @@ def test_same_initial_state_and_targets_in_common_physics(physics):
     # manifolds. Bound short-horizon motion independently of the tight servo check.
     assert max(position_errors) < 1e-3  # 1 mm over four control intervals
     assert max(rotation_errors) < 5e-3  # 0.29 degrees
+
+
+def test_training_advances_at_100hz_without_changing_common_timestep(physics):
+    from flash_chord.h2r.inputs import read_json
+
+    env, common, binding = physics
+    settings = read_json(binding.parent / "human/scene.json")["settings"]
+    original_common_dt = common.opt.timestep
+    assert env.scene.model.h2r_settings["timestep_s"] == settings["timestep_s"]
+    assert (env.config.sim.fps, env.config.sim.substeps) == (20, 5)
+    env.reset(frame_id=0)
+    before = env.solver.mjw_data.time.numpy().copy()
+    env.step(wp.zeros(env.action.action_dim, dtype=wp.float32, device=env.device))
+    np.testing.assert_allclose(env.solver.mjw_data.time.numpy() - before, 0.05, atol=1e-6)
+    np.testing.assert_allclose(env.solver.mjw_model.opt.timestep.numpy(), 0.01, atol=1e-8)
+    assert common.opt.timestep == original_common_dt
+    assert env.scene.model.h2r_settings["timestep_s"] == settings["timestep_s"]
 
 
 def test_masked_reset_discards_solver_and_contact_history(physics):

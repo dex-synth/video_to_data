@@ -36,7 +36,7 @@ from flash_chord.training.flash_sac.evaluation import load_policy_for_inference
 from flash_chord.utils.quat import quat_rotate_xyzw
 
 from .action import H2rActionConfig
-from .inputs import load_binding
+from .inputs import TRAINING_CLOCKS, load_binding
 from .reference import load_h2r
 from .robot import H2rSharpaHands
 from .scene import build_h2r_scene
@@ -83,9 +83,10 @@ class Controller:
         env = cfg.env
         if (env.arm_position_integral.gain_s_inv2 != 0 or env.enforce_joint_velocity_limits
                 or env.action.delay.min_steps != 0 or env.action.delay.max_steps != 0
-                or (env.sim.fps, env.sim.substeps) not in ((20, 6), (30, 4))):
+                or (env.sim.fps, env.sim.substeps) not in TRAINING_CLOCKS):
             raise ValueError("Deployment requires the trained 20/30 Hz, zero-delay position controller")
         self.control_dt = 1 / env.sim.fps
+        # Match policy time, not training substeps: the bench owns integration.
         self.control_ticks = hello["control_ticks"]
         if (type(self.control_ticks) is not int or self.control_ticks <= 0
                 or not np.isclose(self.control_ticks * hello["dt_s"], self.control_dt, rtol=0, atol=1e-12)

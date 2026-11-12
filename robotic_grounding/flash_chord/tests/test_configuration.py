@@ -31,7 +31,7 @@ def test_default_is_the_complete_h2r_recipe():
     assert config.embodiment._target_ == "flash_chord.h2r.robot.H2rSharpaHands"
     assert config.env.action._target_ == "flash_chord.h2r.action.H2rActionConfig"
     assert config.task.motion_speed == 1
-    assert (config.env.sim.fps, config.env.sim.substeps) == (20, 6)
+    assert (config.env.sim.fps, config.env.sim.substeps) == (20, 5)
     assert config.scene.support and not config.scene.decompose_objects
     assert config.action.input_mode == "normalized"
     assert config.action.normalized_mapping == "rational"
@@ -59,7 +59,7 @@ def test_native_training_recipes_are_not_available(experiment):
     "action._target_=flash_chord.runtime.actions.ActionConfig",
     "task.motion_speed=0.5", "task.motion_start_frame=1",
     "task.motion_end_frame=10", "task.source_frame_playback=true",
-    "sim.fps=25", "sim.substeps=5",
+    "sim.fps=25", "sim.substeps=7",
     "scene.support=false", "scene.decompose_objects=true", "scene.object_scale_min=0.8",
     "embodiment.binding_path=/other/h2r_binding.json",
     "~experiment",
@@ -112,7 +112,7 @@ def test_native_robot_configs_are_not_available(embodiment):
 def test_replay_uses_the_common_robot_clock_and_action(runtime):
     cfg = compose_config("replay", [_BINDING])
     assert cfg.replay.action._target_ == "flash_chord.h2r.action.H2rActionConfig"
-    assert (cfg.replay.sim.fps, cfg.replay.sim.substeps) == (20, 6)
+    assert (cfg.replay.sim.fps, cfg.replay.sim.substeps) == (20, 5)
     assert cfg.scene.world_count == 1
     assert cfg.replay.voc_scale == 0
     cfg[runtime].action = {"_target_": "flash_chord.runtime.actions.ActionConfig"}

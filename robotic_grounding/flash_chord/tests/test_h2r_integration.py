@@ -201,14 +201,18 @@ def test_control_reference_interpolates_without_changing_task_endpoint(binding):
                                source.object_body_pos_w()[[0, -1]], atol=1e-12)
 
 
-def test_resume_requires_the_saved_control_frequency(binding, monkeypatch):
+@pytest.mark.parametrize("fps,substeps,message", [
+    (30, 4, "control frequency differs"),
+    (20, 6, "physics substeps differ"),
+])
+def test_resume_requires_the_saved_training_clock(binding, monkeypatch, fps, substeps, message):
     cfg = compose_config("train_flash_sac", [f"task.parquet={binding}"])
     saved = resolved_dict(cfg)
-    saved["env"]["sim"].update(fps=30, substeps=4)
+    saved["env"]["sim"].update(fps=fps, substeps=substeps)
     metadata = {"resolved_config_json": json.dumps(saved)}
     main = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/train_flash_sac.py"))["main"].__wrapped__
     monkeypatch.setitem(main.__globals__, "read_checkpoint_metadata", lambda _: metadata)
     cfg.training.resume = True
     cfg.training.checkpoint_path = "/tmp/policy30.safetensors"
-    with pytest.raises(ValueError, match="control frequency differs"):
+    with pytest.raises(ValueError, match=message):
         main(cfg)

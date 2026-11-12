@@ -80,11 +80,14 @@ prepared from h2r_bench human/scene and `virtual_wrist_sharpa_wave_bimanual` rob
 See [H2R preparation and deployment](docs/h2r_inputs.md) for the preparation command and independent environments.
 
 The common input fixes the complete 56-coordinate robot, articulated object, finite support, source window,
-1× speed and a 30 Hz source reference. The policy runs at native 20 Hz with six 120 Hz physics
-substeps. H2R inputs require this common robot; they never fall back to native assets.
+1× speed and a 30 Hz source reference. Training and method-environment diagnostics use the native
+20 Hz policy clock with five 100 Hz physics substeps. Benchmark evaluation retains its task-owned
+physics timestep. H2R inputs require this common robot; they never fall back to native assets.
 Method-specific IK, contacts, FlashSAC, rewards and VOC training curriculum remain in this codebase.
 `experiment=h2r_sharpa_flash_sac_30hz` retains the historical 30 Hz / four-substep recipe.
-Checkpoint-driven deployment uses the saved control frequency and the task's exact endpoint.
+Historical 20 Hz / six-substep training remains available with `sim.substeps=6`.
+Checkpoint-driven diagnostics retain the saved training clock; deployment matches the saved control
+frequency to the task clock without requiring the same integration timestep.
 
 For an explicit native Sharpa comparison, use `experiment=sharpa_flash_sac` with a native
 ManoSharpaData Parquet and its object/support assets. The restored URDFs, meshes, ball wrists,

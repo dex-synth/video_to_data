@@ -136,3 +136,18 @@ def test_checkpoint_rejects_incompatible_task_clock(controller, field, value):
     with pytest.raises(ValueError, match="Task clock"):
         Controller(os.environ["FLASHCHORD_H2R_CHECKPOINT"],
                    controller.reference.binding_path.parent, hello)
+
+
+@pytest.mark.parametrize("physics_hz", [120, 300])
+def test_deployment_physics_clock_is_independent_of_training(controller, physics_hz):
+    from copy import deepcopy
+
+    hello = deepcopy(controller.hello)
+    hello["dt_s"] = 1 / physics_hz
+    hello["control_ticks"] = round(controller.control_dt * physics_hz)
+    hello["end_tick"] = round(controller.binding["duration_s"] * physics_hz)
+    deployed = Controller(os.environ["FLASHCHORD_H2R_CHECKPOINT"],
+                          controller.reference.binding_path.parent, hello)
+    assert deployed.control_dt == controller.control_dt
+    assert deployed.start()["requirements"]["control_dt_s"] == controller.control_dt
+    assert deployed.saved_config["env"]["sim"] == controller.saved_config["env"]["sim"]

@@ -6,11 +6,11 @@
 
 原生 Sharpa 配方、双手 URDF、引用网格和 embodiment 来自上游 v0.4.0（`8c778f90`），仅为 Newton 1.5 调整 builder target 的坐标布局。它保留 ball 腕、20 Hz／5 子步、0.5× 播放和原生 settling，供场景与控制诊断；本 fork 的共享 replay／optimizer 数值保护仍存在，不能据此宣称训练算法与上游完全等价。数据资产需另行提供并展开 Git LFS。原生调用示例为 `python scripts/train_flash_sac.py experiment=sharpa_flash_sac "task.parquet='/path/to/native.parquet'"`；路径含 `=` 时保留内层引号。上游 `sample_object_vertices` 仅支持可见 mesh，primitive-only `synthbox` 可训练，但诊断评估导出会明确失败；此既有限制保留。
 
-H2R 配方使用 **20 Hz 控制、6 个物理子步、120 Hz 物理、1× 示范**，每手 6 个标量腕关节与 22 个手指关节。H2R 的特征裁剪、状态／样本检查、优化器回滚与 `skip_first_frame_settling=true` 保持启用；这些是保留的行为差异。原生 ball 腕 checkpoint 不能直接用于共同机器人。
+H2R 训练与方法内诊断默认使用 **20 Hz 控制、5 个物理子步、100 Hz 物理、1× 示范**；bench 评估的物理步长仍由共同任务决定，每手 6 个标量腕关节与 22 个手指关节。H2R 的特征裁剪、状态／样本检查、优化器回滚与 `skip_first_frame_settling=true` 保持启用；这些是保留的行为差异。原生 ball 腕 checkpoint 不能直接用于共同机器人。
 
-共同示范与准备产物保持 30 Hz。加载时复用原生位置／关节线性插值、姿态 SLERP 和接触最近邻采样，按 20 Hz 生成内部参考，并保留精确终点。若终点不落在控制网格上，最后一项是终点样本：例如 6.466667 s 的任务在 6.45 s 最后更新，评估仅再积分 2 个 120 Hz tick。训练环境仍执行均匀控制步，终点样本位于其最后一项；方法内部诊断可能覆盖到 6.5 s，不得视为共同评估时间。`sample_times_s` 明确记录内部参考对应的源时间，新 checkpoint 同时记录这些采样时刻。
+共同示范与准备产物保持 30 Hz。加载时复用原生位置／关节线性插值、姿态 SLERP 和接触最近邻采样，按 20 Hz 生成内部参考，并保留精确终点。若终点不落在控制网格上，最后一项是终点样本：例如 6.466667 s 的任务在 6.45 s 最后更新，若评估任务采用 120 Hz，则仅再积分 2 个物理 tick（300 Hz 时为 5 tick）。训练环境仍执行均匀控制步，终点样本位于其最后一项；方法内部诊断可能覆盖到 6.5 s，不得视为共同评估时间。`sample_times_s` 明确记录内部参考对应的源时间，新 checkpoint 同时记录这些采样时刻。
 
-历史 30 Hz／4 子步使用 `experiment=h2r_sharpa_flash_sac_30hz`。旧 checkpoint 按保存的频率加载，续训必须显式选择相同频率；不会重写已有 prepared 或 task。准备阶段继续从 V2D 的 Sharpa MJCF 读取 IK site 朝向，并使用共同 fingertip 位置。
+历史 20 Hz／6 子步使用 `sim.substeps=6`；历史 30 Hz／4 子步使用 `experiment=h2r_sharpa_flash_sac_30hz`，两者均为 120 Hz 训练物理。旧 checkpoint 的方法内诊断按保存的时钟加载，续训必须显式匹配策略频率及物理子步数；不会重写已有 prepared 或 task。准备阶段继续从 V2D 的 Sharpa MJCF 读取 IK site 朝向，并使用共同 fingertip 位置。
 
 | 入口 | 职责 |
 | --- | --- |
@@ -117,13 +117,13 @@ H2R 配方启用 `reset.skip_first_frame_settling=true`：先按原生规则采�
 - IK 使用共同手指几何与限位，保留原生任务权重、warm start、求解器与 task-site 方向；tip-site 位置来自共同 fingertip。准备时以非零多轴姿态比较 Pinocchio／MuJoCo FK，运行时比较 Newton 掌位姿与插值参考，并在共同采样时刻核对 DP、tip；中间时刻由插值腕／手指的 FK 生成，保持原生 Sharpa 绑定语义。
 - 原生动作依旧计算 `q_target = q_ref * quat_rpy(residual)`，`processed_target` 仍为世界掌位姿。最后才转换为 `Rx(roll) Ry(pitch) Rz(yaw)` 与相对零位的 XYZ 平移；按当前真实关节状态选择连续分支，处理 ±π 和 gimbal lock。动作维度是 56，processed pose 维度是 58。此路径只提交位置目标，不额外施加原生 ball 腕 PD 力矩。
 - 物体直接派生 MJCF，避免不必要的 URDF 转换；`ObjectAssetSpec.urdf_path` 沿用原生字段名，在 H2R 专用 scene 中指向此 MJCF。不回退同名 ARCTIC 资产、不再分解碰撞网格、不添加无限地面。保留固定连杆以便逐 body 核对惯量和 frame。
-- 名义物理以共同包为准，覆盖原生场景的摩擦和 solver 默认值。只有控制时钟写在 H2R experiment 中；通用 `sim`／`scene.contact_friction` 默认值不覆盖共同包。VOC、随机 reset 和训练课程仍为方法训练机制，不能用于将来的共同评估。
+- 机器人、物体、材料和 solver 参数以共同包为准，覆盖原生场景默认值。训练／方法内诊断的控制与积分时钟由 H2R experiment 决定（默认 20／100 Hz），无需等于共同包的评估步长；通用 `sim`／`scene.contact_friction` 默认值不覆盖共同包。VOC、随机 reset 和训练课程仍为方法训练机制，不能用于将来的共同评估。
 
 依赖以 `pyproject.toml`／`uv.lock` 为准：MuJoCo / MuJoCo-Warp 3.11.0、Warp 1.16.0、Newton 1.5.0。准备资产从 `compiled.json` 写入实际 `kp/kv`；局部 builder 保留共同虚拟腕／marker 的小惯量；CPU 检查模型和 GPU 模型均恢复共同 scalar joint 总限力开关。
 
 桌面几何来自共同场景导出的 `support.usda`，运行时通过 world-parented fixed joint 建立固定支撑，没有额外 q/DOF。不能用运动学 free joint 代替：Newton 为其增加的巨大 armature 会放大 GPU `meaninertia`，使整个场景提前停止求解。FlashCHORD 的 MuJoCo solver 显式开启 MultiCCD。H2R 还显式写入共同 `margin/gap` 和 raw `solref`，防止 Newton 默认接触包络或原始手指垫材料覆盖共同条件。
 
-H2R 配方设置 `sim.njmax=1024`，为每个 world 分配约束容量。solver 的物理参数来自共同包，容量来自方法配置；两者在同一创建入口组装，之后校验实际 CPU／GPU 模型。
+H2R 配方设置 `sim.njmax=1024`，为每个 world 分配约束容量。solver 的资产／接触／求解参数来自共同包，训练积分步长和容量来自方法配置；两者在同一创建入口组装，之后校验实际 CPU／GPU 模型。
 
 每次创建 solver 都检查最终 MuJoCo 模型的关节、质量、COM、惯量、重力补偿、位置驱动 gain／bias／限幅、接触参数、碰撞凸包、有效碰撞配对和桌面尺寸；额外核验动态自由度、固定支撑、物理开关，以及实际 GPU 模型的 armature、meaninertia 和接触参数。错误在训练前抛出；这些检查不宣称 MuJoCo CPU 与 MuJoCo-Warp 长时闭环轨迹完全相同。
 
@@ -152,11 +152,11 @@ FLASHCHORD_H2R_SCENE=/path/to/bench-task/scene/scene.xml \
   "$FLASH_PY" -m pytest -q tests/test_h2r_physics.py
 ```
 
-该检查覆盖实际 GPU 参数的故障注入，以及相同首帧和关节目标下的短 MJWarp 物理对照；CPU MuJoCo 仅核对 FK。捕获 `env.reset()` 时仅执行设备检查；重放 graph 后调用 `env.check_reset_validity(reset_mask)` 报告选中 world 的错误。普通 reset 继续即时报告错误。
+该检查覆盖实际 GPU 参数的故障注入，以及相同首帧、关节目标及训练步长下的短 MJWarp 物理对照（仅内存中的对照模型使用训练步长，不修改封存任务）；CPU MuJoCo 仅核对 FK。捕获 `env.reset()` 时仅执行设备检查；重放 graph 后调用 `env.check_reset_validity(reset_mask)` 报告选中 world 的错误。普通 reset 继续即时报告错误。
 
 ## 共同物理评估部署
 
-Bench 用此次训练绑定的共同 human／scene 与 robot 包执行 `prepare-evaluation --contacts --physics-hz 120 --control-hz 20`，准备 metric spec 后启动 UniSim MuJoCo evaluator。方法在自己的环境启动常驻客户端：
+Bench 用此次训练绑定的共同 human／scene 与 robot 包执行 `prepare-evaluation --contacts --method flashchord`，继承共同任务的评估物理步长（不因 100 Hz 训练而改成 100 Hz），准备 metric spec 后启动 UniSim MuJoCo evaluator。方法在自己的环境启动常驻客户端：
 
 ```bash
 "$FLASH_PY" -m flash_chord.h2r.evaluation \
@@ -170,7 +170,7 @@ Bench 用此次训练绑定的共同 human／scene 与 robot 包执行 `prepare-
 
 策略与原生观测／动作 buffer 保留 CUDA 运算和 checkpoint 的计算 dtype。入口在 JAX 初始化前设置 `--xla_gpu_deterministic_ops=true --xla_gpu_autotune_level=0`，每次 actor 推理固定为一个 episode，避免独立进程 autotuning 或评估批量改变浮点计算路径；冲突的 XLA 设置明确拒绝。`--device` 默认 `cuda:0`，物理 evaluator 的 MuJoCo CPU 与方法的 CUDA 推理是独立选择。EMA、原生残差旋转组合、历史及连续腕分支均保留；不附加目标机械限位裁剪。当前入口要求零 delay、无 arm integral、无额外方法速度限制的 H2R 配方。
 
-每个 episode 仅提交一次首帧具名机器人初态，后续按 task 的 `control_ticks` 更新（默认 20／120 Hz 为 6 tick，历史 30／120 Hz 为 4 tick）；终态不再产生动作。控制器输出目录保存 checkpoint hash、配置、输入绑定、XLA flags、观测／动作／目标及耗时，成绩与 physical rollout 由 bench 记录。不同训练输入或 backend 必须另做验证；此入口不保证任务成功。
+每个 episode 仅提交一次首帧具名机器人初态，后续按 task 的 `control_ticks` 更新（20 Hz 控制在 120 Hz 评估中为 6 tick、在 300 Hz 中为 15 tick；与训练的 5 子步独立）；终态不再产生动作。控制器输出目录保存 checkpoint hash、配置、输入绑定、XLA flags、观测／动作／目标及耗时，成绩与 physical rollout 由 bench 记录。不同训练输入或 backend 必须另做验证；此入口不保证任务成功。
 
 部署一致性检查需要 checkpoint、binding 和 evaluator `hello` 的封存 JSON：
 

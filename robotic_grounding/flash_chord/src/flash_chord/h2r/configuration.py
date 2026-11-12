@@ -5,7 +5,7 @@ from pathlib import Path
 
 from omegaconf import OmegaConf
 
-from .inputs import load_binding
+from .inputs import TRAINING_CLOCKS, load_binding
 
 _UNSPECIFIED = object()
 
@@ -46,8 +46,8 @@ def require_h2r_input(config, *, expected_binding=None):
         raise ValueError("H2R robot and task must use the same sealed input")
     if (cfg.task.motion_speed != 1.0 or cfg.task.source_frame_playback
             or cfg.task.motion_start_frame != 0 or cfg.task.motion_end_frame != -1
-            or any((cfg[name].sim.fps, cfg[name].sim.substeps) not in ((20, 6), (30, 4)) for name in runtimes)):
-        raise ValueError("H2R requires its complete 1x window and 120 Hz physics: 20/6 or historical 30/4")
+            or any((cfg[name].sim.fps, cfg[name].sim.substeps) not in TRAINING_CLOCKS for name in runtimes)):
+        raise ValueError("H2R requires its complete 1x window and 20/5 training clock (historical: 20/6 or 30/4)")
     if (not cfg.scene.support or cfg.scene.decompose_objects
             or (cfg.scene.object_scale_min, cfg.scene.object_scale_max) != (1.0, 1.0)):
         raise ValueError("H2R requires its complete support and unchanged object geometry")

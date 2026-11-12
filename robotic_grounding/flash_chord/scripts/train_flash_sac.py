@@ -48,6 +48,8 @@ def main(cfg: DictConfig) -> None:
         validate_input(saved, expected_binding=binding)
         if binding is not None and saved["env"]["sim"]["fps"] != cfg.env.sim.fps:
             raise ValueError("H2R checkpoint control frequency differs; select its 20/30 Hz recipe explicitly")
+        if binding is not None and saved["env"]["sim"]["substeps"] != cfg.env.sim.substeps:
+            raise ValueError("H2R checkpoint physics substeps differ; select its saved sim.substeps explicitly")
     env_config = instantiate_typed(cfg.env, RLEnvConfig)
     embodiment = instantiate_typed(cfg.embodiment, Embodiment)
     collision = instantiate_typed(cfg.collision, CollisionPolicy)

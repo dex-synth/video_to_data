@@ -17,6 +17,12 @@ validates the effective solver model against the common assets.
 
 ## Training settings
 
+Training and method-environment diagnostics default to 20 Hz control, five substeps and 100 Hz physics,
+matching upstream. The integration timestep is independent of the sealed benchmark evaluation timestep;
+common robot, contact and solver parameters still come from the sealed package. Historical 20 Hz /
+120 Hz training uses `sim.substeps=6`; the historical 30 Hz recipe remains explicit. Checkpoint-driven
+diagnostics retain the saved clock, and resume rejects changes to either control frequency or substeps.
+
 The default is 4,096 worlds and 250,003,456 environment steps. `h2r_tracking_250m` preserves the VOC
 schedule and rewards, with exact first-frame, no-wait resets and VOC=0 in the last approximately 50M steps.
 Training curricula are method logic; they do not redefine benchmark initialization or evaluation physics.

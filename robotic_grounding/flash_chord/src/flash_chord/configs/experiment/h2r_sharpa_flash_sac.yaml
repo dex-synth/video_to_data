@@ -1,5 +1,5 @@
 # @package _global_
-# Explicit H2R adaptation: 1x source motion, native 20 Hz control, scalar virtual wrists.
+# Explicit H2R adaptation: 1x motion, native 20/100 Hz training, scalar virtual wrists.
 defaults:
   - override /sim: rl
   - override /scene: train
@@ -22,7 +22,7 @@ task:
   motion_end_frame: -1
 sim:
   fps: 20.0
-  substeps: 6
+  substeps: 5
   # Extra constraint capacity for the common robot and detailed object collisions.
   njmax: 1024
 scene:
