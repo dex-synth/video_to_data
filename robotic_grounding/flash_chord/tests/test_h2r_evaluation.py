@@ -105,6 +105,12 @@ def test_h2r_state_observation_actor_and_control_parity(controller):
         for step in range(24):
             frame = native_frame(c, env, step * c.control_ticks)
             contacts_seen += len(frame["contacts"]["records"])
+            if step:
+                # Bench environment geometry (e.g. its world-attached table) has no
+                # method body; such contacts must be ignored without changing features.
+                frame["contacts"]["records"].append({
+                    "body1": "left_middle_DP", "body2": "world", "point1_local": [0., 0., 0.],
+                    "point2_local": [0., 0., 0.], "force_on_body2_world": [0., 0., 1.]})
             native_obs = env.observation_strategy.compute(env.state_0).numpy().reshape(1, -1)
             native_action, _ = gpu_policy(gpu_actor, jax.device_put(native_obs, gpu), gpu_key)
             _, actual = c.step([frame])

@@ -202,7 +202,10 @@ class Controller:
             for contact in contacts["records"]:
                 a, b = contact["body1"], contact["body2"]
                 if a not in self.shape_by_body or b not in self.shape_by_body:
-                    raise ValueError(f"Unknown contact body: {a}/{b}")
+                    # Bodies absent from the method model (e.g. bench `world`
+                    # geometry) cannot be a hand link or an object body, so
+                    # feature aggregation would discard the pair anyway.
+                    continue
                 shape_offset = world * self.contact.shapes_per_world
                 contact_rows.append((self.shape_by_body[a] + shape_offset, self.shape_by_body[b] + shape_offset,
                                      finite_array(contact["point1_local"], (3,), "point1"),
