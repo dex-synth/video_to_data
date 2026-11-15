@@ -1,11 +1,11 @@
 # FlashCHORD：H2R 适配与 original 对比
 
-本文对比 **Sharpa 双手 FlashSAC** 的默认配方，不包含其他机器人、PPO 或单次实验的 CLI 覆盖。核对日期：2026-11-11。
+本文对比 **Sharpa FlashSAC** 的默认配方，不包含其他机器人、PPO 或单次实验的 CLI 覆盖。核对日期：2026-11-15（输入改为 h2r_bench 的 task 目录之后）。
 
 | 对象 | 版本与入口 |
 | --- | --- |
 | original | 上游 v0.4.0，commit `8c778f905cb35f76f8e6cd6e2ea486da4fb9e0ef`，`experiment=sharpa_flash_sac` |
-| 当前 H2R | fork `main`：在 `b89574853a5de6e8990546d65db2be3d8c781447` 之上恢复 100 Hz 训练时钟、加入关节越限处理模式与 ARCTIC v3 输入准入；默认 `experiment=h2r_sharpa_flash_sac` |
+| 当前 H2R | fork 分支 `unified-task-distribution`：输入为一个 h2r_bench task 目录，评估协议为 `h2r-evaluation-v2`；默认 `experiment=h2r_sharpa_flash_sac` |
 
 当前版本保留原生 IK、FlashSAC 主体、观测、奖励与 VOC 课程，同时适配共同输入、机器人和物理评估，并修改部分训练行为。因此应称为 **FlashCHORD 的 H2R 适配配方**，不能直接等同于未经修改的 original。表中的“一致”仅指该行列出的设置或逻辑。
 
@@ -13,27 +13,29 @@
 
 | 项目 | original | 当前 H2R |
 | --- | --- | --- |
-| 输入与准备入口 | V2D loader → 数据集 retarget 脚本 → `ManoSharpaData` Parquet | `h2r.prepare` 读取共同 human／scene／robot 包，生成特征、IK、Parquet、56 维机器人参考及 `h2r_binding.json`；记录来源和文件 hash |
-| 任务窗口、坐标与资产 | 由原生数据管线和配置选择 | 服从共同包；禁止方法侧再次裁剪、缩放物体或替换场景；核对 MANO 表面、关节、坐标和时间 |
+| 输入与准备入口 | V2D loader → 数据集 retarget 脚本 → `ManoSharpaData` Parquet | `h2r.prepare` 读取一个 task 目录（demo、robot 及装配后的场景），生成特征、IK、Parquet、按机器人关节命名的参考及 `h2r_binding.json`；以 `task_id` 绑定并记录方法产物 hash |
+| 任务窗口、坐标与资产 | 由原生数据管线和配置选择 | 服从 task；禁止方法侧再次裁剪、缩放物体或替换场景；人手关节与表面直接取 demo，并核对原生 MANO 层的解读与之一致 |
+| 参与手 | 双手 | 取 `task.hand_sides`；单手任务只准备、训练和控制该手 |
+| 物体结构 | 按数据集选择原生资产：ARCTIC 关节物体或独立刚体 URDF | 取 `task.demo.objects`：任意数量的自由根物体，各含任意数量的部件与铰链；与数据集名称无关 |
 | 示范播放速度 `task.motion_speed` | `0.5` | `1.0` |
 | 参考时间 | 按目标控制频率和播放速度重采样 | 共同参考保持 30 Hz；内部按 20 Hz 采样，并额外保留精确终点；保存 `sample_times_s` |
 | 参考插值 | 位置／关节线性插值，姿态 SLERP，接触最近邻；机器人参考由插值姿态 FK 生成 | 一致 |
-| MANO 与接触特征主体 | 原生 MANO、原生 fingertip 顶点、接触检测及逐 link 聚合；接触距离阈值 `0.01 m` | 一致 |
+| MANO 与接触特征主体 | 原生 MANO、原生 fingertip 顶点、接触检测及逐 link 聚合；接触距离阈值 `0.01 m` | 关节坐标系来自原生 MANO 层，原生 fingertip 顶点、接触检测与逐 link 聚合一致；关节位置与表面取 demo 的解码结果（与原生解码相差 < 0.1 mm） |
 | 接触表面采样 | 每部件请求 4096 点；采样调用不指定 seed | 点数一致；固定第 `i` 个部件的 seed 为 `1+i`（从 0 编号），记录实际采样数 |
 | 无效接触投影 | 直接保存原生聚合／投影结果 | 若法向长度 ≤ `1e-6` 或部件 ID ≤ 0，清空该接触槽；有效法向归一化 |
 | IK 模型 | V2D Sharpa MJCF | 从共同机器人派生手指模型，使用共同几何和限位；保留原生 task-site 朝向，tip-site 位置采用共同 fingertip |
 | IK 求解与任务参数 | `SharpaHandKinematics`；`daqp`；最多 100 次迭代；200 Hz 求解步长；收敛阈值 `1e-6`；原生任务权重；逐帧 warm start；`use_relative_frames=false` | 一致 |
 | ARCTIC IK 参数 | `mano_to_robot_scale=1.0`；腕初始偏置 `xyzw=[-0.5,0.5,0.5,0.5]` | 一致 |
-| OakInk2 IK 参数 | `mano_to_robot_scale=1.2`；腕初始偏置 `None` | 一致 |
+| OakInk2、HOT3D、TACO IK 参数 | `mano_to_robot_scale=1.2`；腕初始偏置 `None` | 一致 |
 
-IK 的 `mano_to_robot_scale` 缩放相对腕部的人手目标，不缩放共同物体或计分轨迹。当前数据接入范围为 ARCTIC 双部件单铰链及 OakInk2 独立刚体；具体准入限制见 [H2R 工作流](h2r_inputs.md)。
+IK 的 `mano_to_robot_scale` 缩放相对腕部的人手目标，不缩放共同物体或计分轨迹。四个数据集各自对应上游的 Sharpa 重定向入口，未列出的数据集没有默认配方；支持的结构与原生限制见 [H2R 工作流](h2r_inputs.md)。
 
 ## 机器人、动作与物理
 
 | 项目 | original | 当前 H2R |
 | --- | --- | --- |
-| 机器人与腕结构 | 原生 Sharpa URDF；每手 3 个平移关节、1 个三自由度 ball 腕和 22 个手指关节 | 共同 `virtual_wrist_sharpa_wave_bimanual` MJCF；每手 XYZ＋roll/pitch/yaw 六个标量腕关节和 22 个手指关节，共 56 维坐标 |
-| 策略动作／processed pose 维数 | `56 / 58` | 一致 |
+| 机器人与腕结构 | 原生 Sharpa URDF；每手 3 个平移关节、1 个三自由度 ball 腕和 22 个手指关节 | task 的 `sharpa_wave` MJCF（只含参与手）；每手 XYZ＋roll/pitch/yaw 六个标量腕关节和 22 个手指关节，双手共 56 维坐标 |
+| 策略动作／processed pose 维数 | `56 / 58` | 双手一致；单手为 `28 / 29` |
 | 动作表示 | `residual_hand_pose`；`input_mode=normalized`，`normalized_mapping=rational`；姿态残差右乘参考四元数 | 一致 |
 | 残差 scale：腕位置／腕姿态／手指 | `0.05 m / 0.15 rad / 0.15 rad` | 一致 |
 | 残差 clip：腕位置／腕姿态／手指 | `0.2 m / 1.0 rad / 1.0 rad` | 一致 |
@@ -43,12 +45,13 @@ IK 的 `mano_to_robot_scale` 缩放相对腕部的人手目标，不缩放共同
 | 策略频率 `sim.fps` | `20 Hz` | 一致 |
 | 训练／方法内诊断的物理子步／频率 | `5 / 100 Hz` | 一致；bench 评估仍使用共同任务的物理步长 |
 | 训练 backend | Newton `SolverMuJoCo`／MuJoCo-Warp | 一致 |
-| 物体／支撑导入 | 原生物体资产；`decompose_objects=true`；支撑使用 kinematic free joint | 共同 MJCF，`decompose_objects=false`，保留已有碰撞体；有限桌面固定到 world，无额外动态自由度 |
+| 物体／支撑导入 | 原生物体资产；`decompose_objects=true`；支撑使用 kinematic free joint | task 的 MJCF，`decompose_objects=false`，保留已有碰撞体；桌面、额外盒状支撑与固定 mesh 合并为一个固定到 world 的 body，无额外动态自由度 |
+| 物体关节辅助驱动 | 关节物体的铰链 `kp=50, kd=2, effort_limit=50`，随 VOC 缩放 | 对 task 的每个铰链使用同一组数值 |
 | 物体尺度／支撑开关 | 尺度范围 `[1.0,1.0]`；`support=true` | 一致 |
 | 碰撞配置 | `ground=true`；`robot_support_collision=false` | `ground=false`；`robot_support_collision=true`；保留共同有效碰撞配对 |
 | solver 与接触参数 | `newton / implicitfast / pyramidal`；`impratio=20`；`iterations=100`；`ls_iterations=50`；材料取原生资产／场景设置 | solver、积分器、锥模型、迭代数、容差、重力，以及摩擦、`solref/solimp`、`margin/gap` 均读取共同包；运行时覆盖通用 YAML 默认值 |
 | solver 容量 | `njmax=512`，`nconmax=256` | `njmax=1024`；`nconmax` 一致 |
-| backend 兼容与校验 | 使用原生导入和 solver 默认行为 | 显式启用 MultiCCD；保留共同小惯量和 scalar joint 总限力；逐项校验实际 CPU／GPU 模型；target API 改用 Newton 1.5 的 `joint_target_q/qd` |
+| backend 兼容与校验 | 使用原生导入和 solver 默认行为 | 显式启用 MultiCCD；保留共同小惯量和 scalar joint 总限力；实际 CPU／GPU 模型与 task 装配后的 `scene.xml` 逐项比较；target API 改用 Newton 1.5 的 `joint_target_q/qd` |
 | 依赖版本 | MuJoCo／MuJoCo-Warp `3.8.1`；Newton `1.2.0`；Warp `1.14.0` | 分别为 `3.11.0`、`1.5.0`、`1.16.0`；移除 SONIC 所用 `onnxruntime-gpu` |
 
 `compiled.json` 是 bench 共同机器人包中的编译参数记录。例如，资产用阻尼比 `dampratio` 配置执行器时，FlashCHORD 读取模型编译后解析出的实际阻尼系数 `kv`，显式写入训练侧模型，避免不同导入器对阻尼比的处理产生差异。质量、惯量、驱动参数和限力均沿用共同机器人，并检查导入后的模型是否与共同资产一致。
@@ -95,8 +98,8 @@ IK 的 `mano_to_robot_scale` 缩放相对腕部的人手目标，不缩放共同
 | loss scale／无进展停止 | 初始 `65536`，增长因子 `2`、回退 `0.5`、增长间隔 `2000`；无新增下界／停止阈值 | 初始及增长设置一致；新增 `loss_scale_min=1` 和有限上界；`max_failed_updates=1024`，按 critic 尝试／actor 周期检测无进展，保存失败诊断并报错 |
 | 部署环境与动作 | 方法内仿真执行原生控制器 | 新增常驻 socket 控制器；从 bench 读取真实关节、body 和接触反馈，复用原生观测／接触聚合／actor／动作历史，仅提交具名机器人位置目标 |
 | 反馈格式 | Newton 原生状态与接触 | 按名称对齐关节；转换四元数、body-origin→COM 速度及接触力方向；缺失、错序或错时钟反馈直接拒绝 |
-| 评估初始化、VOC 与结束 | 方法自己的 reset、VOC 和 rollout 配置 | bench 掌握评估物理、初始化规则与计分时钟；方法提交首帧机器人参考，不向评估世界施加 VOC、物体控制或自动 reset；末段由 bench 精确截断 |
-| checkpoint 绑定与指标 | 原生参考及方法内评估工具 | 记录共同输入身份、采样时刻与 schema，拒绝混用输入／时钟；方法内评估作为诊断，正式 rollout 和指标由 h2r_bench 独立执行 |
+| 评估初始化、VOC 与结束 | 方法自己的 reset、VOC 和 rollout 配置 | bench 掌握评估物理、初始化规则与计分时钟；方法声明自己的 20 Hz 控制周期并提交首帧机器人参考（完整参考手指、零速度、无 warm-up，位于训练 reset 分布的边缘），不向评估世界施加 VOC、物体控制或自动 reset；末段由 bench 精确截断 |
+| checkpoint 绑定与指标 | 原生参考及方法内评估工具 | 记录 `task_id` 等输入身份、采样时刻与 schema，拒绝混用输入／时钟；方法内评估作为诊断，正式 rollout 和指标由 h2r_bench 独立执行 |
 
 上述状态边界、样本过滤、特征裁剪、优化器回滚和首帧 settling 会改变训练行为；它们不是只改日志或字段名称。详细处理见 [数值稳定性](numerical_stability.md)。
 
@@ -108,8 +111,8 @@ IK 的 `mano_to_robot_scale` 缩放相对腕部的人手目标，不缩放共同
 
 | 入口 | 与当前默认配方的关系 |
 | --- | --- |
-| `sim.substeps=6` | 历史 H2R 变体：20 Hz 策略、6 子步、120 Hz 训练物理；旧 checkpoint 方法内诊断保留保存值，续训须显式匹配子步数 |
-| `experiment=h2r_sharpa_flash_sac_30hz` | 历史 H2R 变体：30 Hz 策略、4 子步、120 Hz 物理；旧 checkpoint 按保存的频率加载，续训不能隐式改频率 |
+| `sim.substeps=6` | 可显式选择的训练时钟：20 Hz 策略、6 子步、120 Hz 训练物理；续训须显式匹配子步数 |
+| `experiment=h2r_sharpa_flash_sac_30hz` | 可显式选择的训练时钟：30 Hz 策略、4 子步、120 Hz 物理；部署时声明 30 Hz 控制周期，续训不能隐式改频率 |
 | `curriculum=h2r_tracking_250m` | 可选 reset 消融：最后约 50M 步 `immediate_first_frame_probability=1`，首帧、完整参考手指、无 settling、VOC=0；不是默认课程 |
 | `experiment=sharpa_flash_sac` | 已恢复原生配方、Sharpa URDF／必要网格、ball 腕、20 Hz／5 子步和 0.5× 速度；仍共享本 fork 的 backend 与数值保护改动，不等于独立 original checkout |
 | G1／Dexmate／PPO／SONIC | 相关公开训练入口及专用资产已移除；不属于当前 H2R 支持范围 |

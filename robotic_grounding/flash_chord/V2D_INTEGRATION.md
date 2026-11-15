@@ -4,8 +4,9 @@ This FlashCHORD fork trains only from sealed h2r_bench inputs. The public entry 
 `task.parquet=/path/to/prepared/h2r_binding.json`, using the sole `h2r_sharpa_flash_sac` recipe.
 See [the H2R workflow](docs/h2r_inputs.md) for preparation and execution.
 
-The task reference, object/support scene and complete robot come from h2r_bench. The method's
-`h2r.prepare` uses V2D MANO/contact and Sharpa IK components to derive its private reference.
+The task reference, object/environment scene and robot come from one h2r_bench task directory, read through
+the vendored `h2r/h2r_io` loader. The method's `h2r.prepare` uses V2D MANO joint frames, contact and Sharpa IK
+components to derive its private reference.
 That reference is stored as `processed.parquet` inside the preparation package and is covered
 by the binding's file hashes. It is not a standalone public training input.
 
@@ -19,6 +20,6 @@ FlashCHORD's vendored Sharpa, Vega/Dexmate and G1 URDFs/meshes, adapters and SON
 The sibling V2D assets remain available to preparation through its independent loader/IK
 environments: `h2r/assets.py` reads Sharpa MJCF site orientations, then attaches those IK objectives
 to the common hand subtree and uses common fingertip positions. These templates are required for
-preparation and are not loaded as the physical robot. H2R physics uses the copied common robot and scene assets, not a same-named
+preparation and are not loaded as the physical robot. H2R physics uses the task's robot and scene, not a same-named
 native asset selected from that tree. Historical reference corpora and checkpoints are not
 rewritten or migrated. Formal physical evaluation remains owned by h2r_bench.

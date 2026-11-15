@@ -76,18 +76,21 @@ Change `markers.enabled=false` to `markers.enabled=true` in replay/policy comman
 ## H2R inputs
 
 This fork defaults to `h2r_sharpa_flash_sac`. It requires a sealed `h2r_binding.json`
-prepared from h2r_bench human/scene and `virtual_wrist_sharpa_wave_bimanual` robot bundles.
+prepared from one h2r_bench task directory (`python -m flash_chord.h2r.prepare prepare --task ...`).
 See [H2R preparation and deployment](docs/h2r_inputs.md) for the preparation command and independent environments.
 
-The common input fixes the complete 56-coordinate robot, articulated object, finite support, source window,
-1× speed and a 30 Hz source reference. Training and method-environment diagnostics use the native
-20 Hz policy clock with five 100 Hz physics substeps. Benchmark evaluation retains its task-owned
-physics timestep. H2R inputs require this common robot; they never fall back to native assets.
+The task fixes the robot (Sharpa Wave with the task's participating hands), every interaction object
+(any number of free-root objects with any number of parts and hinge joints), the static environment
+(table, extra box supports, fixed meshes), the complete 1× reference and all physical parameters.
+Training and method-environment diagnostics use the native 20 Hz policy clock with five 100 Hz physics
+substeps; the task's nominal 300 Hz step is not the training step. In benchmark evaluation the controller
+declares its 20 Hz control period and the evaluation owns the physics step.
+H2R inputs require the task's robot; they never fall back to native assets.
 Method-specific IK, contacts, FlashSAC, rewards and VOC training curriculum remain in this codebase.
-`experiment=h2r_sharpa_flash_sac_30hz` retains the historical 30 Hz / four-substep recipe.
-Historical 20 Hz / six-substep training remains available with `sim.substeps=6`.
-Checkpoint-driven diagnostics retain the saved training clock; deployment matches the saved control
-frequency to the task clock without requiring the same integration timestep.
+`experiment=h2r_sharpa_flash_sac_30hz` selects a 30 Hz / four-substep training clock and
+`sim.substeps=6` a 20 Hz / six-substep one; both must be chosen explicitly.
+Checkpoint-driven diagnostics retain the saved training clock; deployment declares the saved control
+period without requiring the same integration timestep.
 
 For an explicit native Sharpa comparison, use `experiment=sharpa_flash_sac` with a native
 ManoSharpaData Parquet and its object/support assets. The restored URDFs, meshes, ball wrists,

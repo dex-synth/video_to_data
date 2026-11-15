@@ -30,15 +30,18 @@ Top-level entry points are in `scripts/`:
 `workflow/` contains remote training and evaluation templates. `tests/` separates pure/unit coverage from optional
 CUDA and local-sequence integration coverage.
 
-The H2R adapter has three module entry points: `h2r.prepare` builds the immutable method reference,
-`h2r.evaluation` serves the native controller over the benchmark socket, and `h2r.cpu_evaluation` independently
-checks that controller on the common MuJoCo CPU task. Training and visualization use the scripts above. `h2r/configuration.py` checks sealed input identity before training, resume, evaluation, policy viewing and replay; native checkpoints and task-changing overrides are rejected.
-The CPU check does not replace benchmark-owned evaluation. Commands and regression inputs are documented in
+The H2R adapter has two module entry points: `h2r.prepare` builds the immutable method reference from one
+h2r_bench task directory, and `h2r.evaluation` serves the native controller over the benchmark socket
+(`h2r-evaluation-v2`). `h2r/h2r_io/` is the vendored h2r_bench loader and wire protocol; it is never edited here
+and is excluded from the linters. Training and visualization use the scripts above. `h2r/configuration.py` checks
+sealed input identity and selects the task's participating hands before training, resume, evaluation, policy
+viewing and replay; native checkpoints and task-changing overrides are rejected.
+Commands and regression inputs are documented in
 [the H2R workflow](h2r_inputs.md); generated inputs, checkpoints, and diagnostic runs belong outside the source tree.
 
 `scene/support.py` attaches support surfaces to the world with a fixed joint; support bindings own bodies and shapes,
 not dynamic coordinates. `runtime/sim.py` enables MuJoCo MultiCCD. The H2R adapter additionally validates the active
-GPU model against the common scene; see [H2R inputs and physics checks](h2r_inputs.md).
+GPU model against the task's assembled scene; see [H2R inputs and physics checks](h2r_inputs.md).
 
 Reference sequence corpora, system-identification data/pipelines, retired experiment matrices, policy exporters,
 and checkpoint migration layers are not part of the release branch.
