@@ -99,8 +99,8 @@ def test_binding_identifies_the_task_and_rejects_other_inputs(tmp_path):
     assert (binding["format"], binding["task_id"], binding["hand_sides"]) == (FORMAT, task.task_id, ["right"])
     assert set(binding["files"]) == {"assets/scene.xml"}  # the task copy is sealed by its own identity
     # A preparation of the former human/robot bundles.
-    write_json(binding_path, {**binding, "format": "flashchord-h2r-v1", "human_bundle_id": "0" * 64})
-    with pytest.raises(ValueError, match="Unsupported FlashCHORD preparation 'flashchord-h2r-v1'.*prepare again"):
+    write_json(binding_path, {**binding, "format": "flashchord-h2r-v2"})
+    with pytest.raises(ValueError, match="Unsupported FlashCHORD preparation 'flashchord-h2r-v2'.*prepare again"):
         load_prepared(binding_path)
     write_json(binding_path, {**binding, "task_id": "0" * 64})
     with pytest.raises(ValueError, match="different task"):

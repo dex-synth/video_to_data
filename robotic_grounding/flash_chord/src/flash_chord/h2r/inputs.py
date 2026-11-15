@@ -9,7 +9,9 @@ from .h2r_io.files import file_hashes, read_json, sha256, verify_files, write_js
 __all__ = ["BINDING", "DIGITS", "FORMAT", "TRAINING_CLOCKS", "frame_names", "load_input", "load_prepared",
            "read_json", "seal_prepared", "sha256", "write_json"]
 
-FORMAT = "flashchord-h2r-v2"  # v1 bound the former human/robot bundles
+# v1 bound the former human/robot bundles. v3: the training scene keeps MuJoCo's default hull limit for
+# meshes without maxhullvert, as the task model does; v2 checkpoints trained with Newton's limit of 64.
+FORMAT = "flashchord-h2r-v3"
 BINDING = "h2r_binding.json"
 ROBOT = "sharpa_wave"  # the native IK, link geometry and contact links exist for this hand only
 DIGITS = ("thumb", "index", "middle", "ring", "pinky")

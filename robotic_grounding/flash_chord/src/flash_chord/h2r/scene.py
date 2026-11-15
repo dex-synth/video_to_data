@@ -26,8 +26,10 @@ def build_h2r_scene(reference, embodiment, world_count, collision):
     layout = embodiment.build(builder)
     robot_reference = embodiment.bind_reference(builder, layout, reference)
     robot_shapes = ShapeSpan(0, builder.shape_count)
+    # A mesh without maxhullvert keeps MuJoCo's default (no limit), as in the task model; Newton's
+    # own default of 64 changes how MuJoCo builds the hull polygons and thus face contacts.
     builder.add_mjcf(str(reference.binding_path.parent / "assets" / "scene.xml"),
-                     parse_mujoco_options=False, collapse_fixed_joints=False)
+                     parse_mujoco_options=False, collapse_fixed_joints=False, mesh_maxhullvert=-1)
     support = bind_support(builder)
     object_shapes = ShapeSpan(robot_shapes.stop, support.shapes.start)
     objects = [bind_object(builder, reference, obj, asset, object_shapes)

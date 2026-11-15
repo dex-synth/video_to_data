@@ -70,10 +70,11 @@ def test_fixed_support_and_active_solver_guards(physics):
 def test_same_initial_state_and_targets_in_common_physics(physics, lift_m):
     """Same state and targets in the method model and in the task model, both stepped by MJWarp.
 
-    With the objects raised into free fall the two must agree to rounding: masses, inertias,
-    joints, gravity and integration are the task's. At the reference pose the objects rest on
-    their supports; convex-mesh contact points then depend on the imported mesh data, so only
-    a short-horizon bound is checked.
+    The method model may not deviate from the task model by more than the task model deviates from
+    itself when its start moves by a few float32 steps: contact-rich starts (hands closed around an
+    object, a light part between tongs) amplify rounding on their own. At the reference pose the
+    objects rest on their supports and the hands move, so contacts, masses, inertias and joints
+    are all exercised; raised into free fall, the objects check gravity and integration alone.
     """
     from copy import deepcopy
 
@@ -102,21 +103,45 @@ def test_same_initial_state_and_targets_in_common_physics(physics, lift_m):
     task = env.reference.task
     parts = env.reference.object_body_names()
     hinges = [joint.mjcf_name for obj in task.demo.objects.values() for joint in obj.joints]
+    roots = [int(common.joint(obj.root_joint).qposadr[0]) for obj in task.demo.objects.values()]
     # Both runtimes initialize through float32 coordinates; preserve that boundary.
-    for obj in task.demo.objects.values():
-        root, index = int(common.joint(obj.root_joint).qposadr[0]), parts.index(obj.root_part)
+    for obj, root in zip(task.demo.objects.values(), roots):
+        index = parts.index(obj.root_part)
         data.qpos[root:root + 3] = env.reference.object_body_pos_w()[0, index].astype(np.float32)
         data.qpos[root + 2] = np.float32(np.float32(data.qpos[root + 2]) + np.float32(lift_m))
         data.qpos[root + 3:root + 7] = env.reference.object_body_quat_w()[0, index].astype(np.float32)
     for column, name in enumerate(hinges):
         data.qpos[int(common.joint(name).qposadr[0])] = np.float32(env.reference.object_articulation()[0, column])
-    mujoco.mj_forward(common, data)
-    # Both worlds use the same physics backend. CPU MuJoCo is used below
-    # only to inspect post-integration kinematics, never to advance physics.
+    # The rounding reference: the same task, its start moved by a few float32 steps.
+    shifted = deepcopy(data)
+    shifted.qpos[q_ids] += 2e-7
+    for root in roots:
+        shifted.qpos[root:root + 3] += (2e-8, 2e-8, 6e-8)
+    worlds = []
+    for start in (data, shifted):
+        mujoco.mj_forward(common, start)
+        # Both worlds use the same physics backend. CPU MuJoCo is used below
+        # only to inspect post-integration kinematics, never to advance physics.
+        worlds.append(mjwarp.put_data(common, start, nworld=1, nconmax=1024, njmax=4096))
     gpu_model = mjwarp.put_model(common)
-    gpu_data = mjwarp.put_data(common, data, nworld=1, nconmax=1024, njmax=4096)
+    bodies = [task.object_binding["parts"][p] for p in parts]
     contacts_seen = 0
-    position_errors, rotation_errors = [], []
+    method_errors, rounding_errors = np.zeros(4), np.zeros(4)  # robot q, robot qd, object position, rotation
+
+    def errors(q, qd, poses, reference):
+        position = max(float(np.linalg.norm(a[:3] - reference.body(n).xpos)) for a, n in zip(poses, bodies))
+        rotation = max(float((Rotation.from_quat(a[3:]).inv()
+                              * Rotation.from_quat(reference.body(n).xquat[[1, 2, 3, 0]])).magnitude())
+                       for a, n in zip(poses, bodies))
+        return np.array([np.abs(q - reference.qpos[q_ids]).max(), np.abs(qd - reference.qvel[dof_ids]).max(),
+                         position, rotation])
+
+    def poses(cpu, gpu):
+        cpu.qpos[:], cpu.qvel[:] = gpu.qpos.numpy()[0], gpu.qvel.numpy()[0]
+        # Refresh post-integration poses without advancing the world.
+        mujoco.mj_kinematics(common, cpu)
+        return [np.r_[cpu.body(n).xpos, cpu.body(n).xquat[[1, 2, 3, 0]]] for n in bodies]
+
     for step in range(4):
         action = wp.array(np.full(env.action.action_dim, 0.1 * (-1) ** step, np.float32), device=env.device)
         env.step(action)
@@ -128,35 +153,28 @@ def test_same_initial_state_and_targets_in_common_physics(physics, lift_m):
                 assert len(assist) > 0
                 for field in ("actuator_gainprm", "actuator_biasprm"):
                     np.testing.assert_array_equal(getattr(env.solver.mjw_model, field).numpy()[:, assist], 0)
-        targets = env.action.joint_target.numpy()[list(layout.dof_ids)]
-        data.ctrl[actuator_ids] = targets
-        gpu_data.ctrl.assign(data.ctrl[None, :].astype(np.float32))
+        data.ctrl[actuator_ids] = env.action.joint_target.numpy()[list(layout.dof_ids)]
+        for world in worlds:
+            world.ctrl.assign(data.ctrl[None, :].astype(np.float32))
         for _ in range(env.config.sim.substeps):
-            mjwarp.step(gpu_model, gpu_data)
-            contacts_seen += int(gpu_data.nacon.numpy()[0])
-        data.qpos[:] = gpu_data.qpos.numpy()[0]
-        data.qvel[:] = gpu_data.qvel.numpy()[0]
-        np.testing.assert_allclose(env.state_0.joint_q.numpy()[list(layout.q_ids)], data.qpos[q_ids], atol=2e-5, rtol=0)
-        np.testing.assert_allclose(env.state_0.joint_qd.numpy()[list(layout.dof_ids)], data.qvel[dof_ids], atol=2e-3, rtol=0)
-        # Refresh post-integration poses without advancing either world.
-        mujoco.mj_kinematics(common, data)
-        native = env.state_0.body_q.numpy()
-        for body_id, name in zip(env.command.layout.body_ids, (task.object_binding["parts"][p] for p in parts)):
-            observed = data.body(name)
-            position_errors.append(float(np.linalg.norm(native[body_id, :3] - observed.xpos)))
-            delta = Rotation.from_quat(native[body_id, 3:]).inv() * Rotation.from_quat(observed.xquat[[1, 2, 3, 0]])
-            rotation_errors.append(float(delta.magnitude()))
-    if lift_m:
-        assert max(position_errors) < 1e-6 and max(rotation_errors) < 1e-6
-    else:
-        assert contacts_seen > 0
-        # The imported float32 mesh/FK model need not choose identical contact
-        # manifolds. Bound short-horizon motion independently of the tight servo check.
-        assert max(position_errors) < 1e-3  # 1 mm over four control intervals
-        # 0.57 degrees. The full ARCTIC box sequence from frame 0 gives 5.84e-3 rad with this code
-        # and with the code before the task-package migration alike; the earlier 5e-3 bound was
-        # measured on the window [45, 240), which starts from another contact configuration.
-        assert max(rotation_errors) < 1e-2
+            for world in worlds:
+                mjwarp.step(gpu_model, world)
+            contacts_seen += int(worlds[0].nacon.numpy()[0])
+        poses(data, worlds[0])
+        other = poses(shifted, worlds[1])
+        method = env.state_0.body_q.numpy()[list(env.command.layout.body_ids)]
+        method_errors = np.maximum(method_errors, errors(
+            env.state_0.joint_q.numpy()[list(layout.q_ids)], env.state_0.joint_qd.numpy()[list(layout.dof_ids)],
+            method, data))
+        rounding_errors = np.maximum(rounding_errors, errors(
+            shifted.qpos[q_ids], shifted.qvel[dof_ids], other, data))
+    assert contacts_seen > 0 or lift_m
+    # Robot q (rad or m), robot qd, object position (m) and rotation (rad). Before flashchord-h2r-v3,
+    # Newton's default hull limit on the object meshes changed the face contacts: on the ARCTIC box the
+    # rotation differed by 5.8e-3 rad while the rounding reference stayed below 1e-6.
+    floors = np.array([2e-5, 2e-3, 1e-5, 1e-5])
+    bounds = np.maximum(floors, 3 * rounding_errors)
+    assert (method_errors <= bounds).all(), f"method {method_errors}, rounding {rounding_errors}"
 
 
 def test_training_advances_at_100hz_without_changing_common_timestep(physics):

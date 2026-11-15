@@ -91,6 +91,15 @@ def mesh_hull(model, mesh):
     return vertices[model.mesh_graph[start + 2 + count : start + 2 + 2 * count]]
 
 
+def mesh_polygons(model, mesh):
+    """Hull polygons as MuJoCo-Warp uses them for face contacts: vertex counts and vertices, in order."""
+    start, count = model.mesh_polyadr[mesh], model.mesh_polynum[mesh]
+    sizes = model.mesh_polyvertnum[start : start + count]
+    first = model.mesh_polyvertadr[start]
+    vertices = model.mesh_vert[model.mesh_vertadr[mesh] + model.mesh_polyvert[first : first + sizes.sum()]]
+    return sizes, vertices
+
+
 CONTACT_FIELDS = ("friction", "solref", "solimp", "condim", "margin", "gap", "priority", "solmix")
 
 
@@ -145,6 +154,13 @@ def validate_geometry(actual, expected, robot_bodies):
             # including maxhullvert reduction, independently of vertex ordering.
             error = max(cKDTree(a).query(b)[0].max(), cKDTree(b).query(a)[0].max())
             close(error, 0, label + ".collision_hull_m")
+            # The same hull can be split into polygons differently (for example with another
+            # maxhullvert), and face contacts then select other points: require the task's layout.
+            (sizes, vertices), (task_sizes, task_vertices) = (
+                mesh_polygons(actual, actual.geom_dataid[ag]), mesh_polygons(expected, expected.geom_dataid[g]))
+            if not np.array_equal(sizes, task_sizes):
+                raise ValueError(f"H2R physical mismatch for {label}.collision_hull_polygons")
+            close(np.abs(vertices - task_vertices).max(), 0, label + ".collision_hull_polygon_vertices_m")
     for i, g in enumerate(order):
         for j in range(i):
             if collision_allowed(actual, i, j) != collision_allowed(expected, g, order[j]):
