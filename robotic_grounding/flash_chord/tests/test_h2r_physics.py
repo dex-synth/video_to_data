@@ -153,7 +153,10 @@ def test_same_initial_state_and_targets_in_common_physics(physics, lift_m):
         # The imported float32 mesh/FK model need not choose identical contact
         # manifolds. Bound short-horizon motion independently of the tight servo check.
         assert max(position_errors) < 1e-3  # 1 mm over four control intervals
-        assert max(rotation_errors) < 1e-2  # 0.57 degrees
+        # 0.57 degrees. The full ARCTIC box sequence from frame 0 gives 5.84e-3 rad with this code
+        # and with the code before the task-package migration alike; the earlier 5e-3 bound was
+        # measured on the window [45, 240), which starts from another contact configuration.
+        assert max(rotation_errors) < 1e-2
 
 
 def test_training_advances_at_100hz_without_changing_common_timestep(physics):
