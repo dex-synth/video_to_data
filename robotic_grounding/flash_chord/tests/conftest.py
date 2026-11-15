@@ -50,13 +50,25 @@ def h2r_binding():
 
 
 @pytest.fixture
+def h2r_two_hands(h2r_binding):
+    """For tests that construct the native default (two-hand) configuration directly."""
+    from flash_chord.h2r.inputs import load_prepared
+
+    if len(load_prepared(h2r_binding)[0]["hand_sides"]) != 2:
+        pytest.skip("this test builds the native two-hand default configuration; use a two-hand task")
+
+
+@pytest.fixture
 def h2r_config(h2r_binding):
     from flash_chord.configuration import compose_config
+    from flash_chord.h2r.configuration import require_h2r_input
 
     def compose(*overrides):
-        return compose_config("train_flash_sac", [
+        config = compose_config("train_flash_sac", [
             f"task.parquet='{h2r_binding}'", "scene.world_count=2", "logging.mode=disabled", *overrides,
         ])
+        require_h2r_input(config)  # as every application does: admit the binding, select the task's hands
+        return config
 
     return compose
 
@@ -67,9 +79,9 @@ def h2r_setup(h2r_binding):
     from flash_chord.scene.collision import CollisionPolicy
     from flash_chord.scene.setup import setup_scene
 
-    def build(world_count=1):
+    def build(world_count=1, control_fps=20):
         return setup_scene(
-            parquet=h2r_binding, control_fps=30, motion_speed=1,
+            parquet=h2r_binding, control_fps=control_fps, motion_speed=1,
             embodiment=H2rSharpaHands(h2r_binding), collision=CollisionPolicy(ground=False),
             world_count=world_count, include_support=True, decompose_objects=False,
         )

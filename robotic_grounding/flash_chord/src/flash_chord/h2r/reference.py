@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""A native hand-pose reference with explicit H2R asset and time bindings."""
+"""A native hand-pose reference bound to one sealed H2R task and its time grid."""
 
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -15,12 +15,17 @@ from flash_chord.data.reference import (
     ObjectJointPhysicsSpec,
 )
 
-from .inputs import load_binding, member, read_json
+from .h2r_io import Task
+from .inputs import load_prepared
+
+# The native assistance drive of an articulated-object joint (flash_chord.assets.registry); VOC scales it.
+JOINT_DRIVE = ObjectJointDriveSpec(kp=50.0, kd=2.0, effort_limit=50.0)
 
 
 @dataclass
 class H2rReference(ManoSharpaReference):
     binding_path: Path
+    task: Task
     sample_times_s: np.ndarray
 
     def frame_window(self, start_frame=0, end_frame=-1):
@@ -29,41 +34,43 @@ class H2rReference(ManoSharpaReference):
         return self
 
 
+def object_assets(task, scene_xml):
+    """Every interaction object of the task as a native asset: parts, free root and joints.
+
+    Articulation columns follow the scene's objects and their joints, as written by preparation.
+    """
+    compiled = task.compiled["base_scene"]["joints"]
+    assets, column = [], 0
+    for obj in task.demo.objects.values():
+        joints = []
+        for joint in obj.joints:
+            physics = ObjectJointPhysicsSpec(compiled[joint.name]["armature"], compiled[joint.name]["friction"])
+            joints.append(ObjectArticulationSpec(joint.mjcf_name, column, physics, JOINT_DRIVE))
+            column += 1
+        bodies = tuple(ObjectBodySpec(part, body) for part, body in obj.parts.items())
+        assets.append(ObjectAssetSpec(obj.name, str(scene_xml), bodies, obj.root_part, tuple(joints)))
+    return tuple(assets)
+
+
 def load_h2r(path, control_fps=None, motion_speed=1.0, source_frame_playback=False):
     path = Path(path).resolve()
-    binding = load_binding(path)
+    binding, task = load_prepared(path)
     if motion_speed != 1.0 or control_fps not in (None, 20.0, 30.0) or source_frame_playback:
-        raise ValueError("H2R requires 1x speed, 20 Hz control (or the historical 30 Hz recipe)")
-    fps = 30.0 if control_fps is None else float(control_fps)
+        raise ValueError("H2R requires 1x speed and 20 Hz control (or the explicit 30 Hz recipe)")
+    root = path.parent
+    assets = object_assets(task, root / "assets" / "scene.xml")
+    source = load_mano_sharpa(str(root / "processed.parquet"), object_assets=assets, sides=task.hand_sides)
+    if (source.fps != task.demo.reference_hz
+            or not np.isclose((source.num_frames - 1) / source.fps, binding["duration_s"], atol=1e-12, rtol=0)):
+        raise ValueError("Processed reference changed the common clock or duration")
+    fps = source.fps if control_fps is None else float(control_fps)
     # Keep every control instant before the fixed endpoint and one terminal
     # sample. Only that last sample may represent a partial control interval.
     count = int(np.ceil(binding["duration_s"] * fps - 1e-10)) + 1
     times = np.minimum(np.arange(count) / fps, binding["duration_s"])
-    scene = read_json(path.parent / "human" / "scene.json")
-    if scene.get("dataset") == "oakink2":
-        ref = read_json(path.parent / "human" / "reference.json")
-        assets = tuple(ObjectAssetSpec(
-            part, str(path.parent / "assets" / "object.xml"),
-            (ObjectBodySpec(part, "object_" + part),), part, (),
-        ) for part in ref["object_geometry"]["part_order"])
-    else:
-        joint = scene["joint"]
-        assets = (ObjectAssetSpec(
-            scene["object"],
-            str(path.parent / "assets" / "object.xml"),
-            (ObjectBodySpec("bottom", "object_bottom"), ObjectBodySpec("top", "object_top")),
-            "bottom",
-            (ObjectArticulationSpec(
-                "object_hinge", 0,
-                ObjectJointPhysicsSpec(joint["armature"], joint["friction"]),
-                ObjectJointDriveSpec(50.0, 2.0, 50.0),
-            ),),
-        ),)
-    source = load_mano_sharpa(str(path.parent / "processed.parquet"), object_assets=assets)
-    if source.fps != 30 or not np.isclose((source.num_frames - 1) / 30, binding["duration_s"], atol=1e-12, rtol=0):
-        raise ValueError("Processed reference changed the common duration")
-    reference = source if fps == 30 else load_mano_sharpa(
-        str(path.parent / "processed.parquet"), control_fps=fps, object_assets=assets, sample_times_s=times)
-    reference._object_mesh_paths = [str(member(path.parent, p)) for p in reference.object_mesh_paths()]
+    reference = source if fps == source.fps else load_mano_sharpa(
+        str(root / "processed.parquet"), control_fps=fps, object_assets=assets, sides=task.hand_sides,
+        sample_times_s=times)
+    reference._object_mesh_paths = [str((root / p).resolve()) for p in reference.object_mesh_paths()]
     reference._metadata = replace(reference.metadata, source_path=str(path))
-    return H2rReference(**vars(reference), binding_path=path, sample_times_s=times)
+    return H2rReference(**vars(reference), binding_path=path, task=task, sample_times_s=times)

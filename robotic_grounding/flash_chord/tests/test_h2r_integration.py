@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Optional checks against a prepared common bundle, never a substitute fixture."""
+"""Optional checks against a prepared h2r-bench task (any structure and hand set), never a substitute fixture."""
 
 import json
 import os
@@ -16,7 +16,7 @@ from flash_chord.configuration import compose_config, instantiate_typed, resolve
 from flash_chord.embodiments.base import Embodiment
 from flash_chord.envs.rl import RLEnv, RLEnvConfig
 from flash_chord.h2r.configuration import require_h2r_input
-from flash_chord.h2r.inputs import human_bundle
+from flash_chord.h2r.inputs import load_prepared
 from flash_chord.h2r.reference import load_h2r
 from flash_chord.runtime.actions.hand_pose import ActionBuffers
 from flash_chord.scene.collision import CollisionPolicy
@@ -32,18 +32,20 @@ def binding():
 
 
 def test_reference_retains_source_clock_and_object(binding):
-    _, metadata, _, arrays = human_bundle(binding.parent / "human")
+    _, task = load_prepared(binding)
+    demo = task.demo
     reference = load_h2r(binding, control_fps=30)
-    assert reference.num_frames == len(arrays["time_s"])
-    np.testing.assert_allclose(reference.object_body_pos_w(), arrays["part_pos_m"], atol=0, rtol=0)
-    np.testing.assert_allclose(reference.object_body_quat_w(), arrays["part_quat_wxyz"], atol=1e-12, rtol=0)
-    if metadata["dataset"] == "oakink2":
-        assert reference.object_articulation().shape == (reference.num_frames, 0)
-        assert reference.object_body_names() == metadata["object_geometry"]["part_order"]
-        assert len(reference.object_assets()) == len(reference.object_body_names())
-    else:
-        np.testing.assert_allclose(reference.object_articulation()[:, 0], arrays["object_hinge_rad"], atol=0, rtol=0)
-    assert (reference.num_frames - 1) / reference.fps == metadata["duration_s"]
+    assert reference.num_frames == len(demo.time_s)
+    assert reference.sides == tuple(task.hand_sides)
+    np.testing.assert_allclose(reference.object_body_pos_w(), demo.arrays["part_pos_m"], atol=0, rtol=0)
+    np.testing.assert_allclose(reference.object_body_quat_w(), demo.arrays["part_quat_wxyz"], atol=1e-12, rtol=0)
+    assert reference.object_body_names() == list(demo.part_order)
+    assert [asset.name for asset in reference.object_assets()] == list(demo.objects)
+    joints = [joint for obj in demo.objects.values() for joint in obj.joints]
+    assert reference.object_articulation().shape == (reference.num_frames, len(joints))
+    for column, joint in enumerate(joints):
+        np.testing.assert_allclose(reference.object_articulation()[:, column], joint.position_rad, atol=0, rtol=0)
+    assert (reference.num_frames - 1) / reference.fps == demo.duration_s
     for kwargs in ({"motion_speed": 0.5}, {"control_fps": 25}, {"source_frame_playback": True}):
         with pytest.raises(ValueError):
             load_h2r(binding, **kwargs)
@@ -52,23 +54,24 @@ def test_reference_retains_source_clock_and_object(binding):
 
 
 def test_application_guard_accepts_sealed_input_and_rejects_changed_binding(binding, tmp_path):
-    cfg = compose_config("train_flash_sac", [f"task.parquet={binding}"])
+    cfg = compose_config("train_flash_sac", [f"task.parquet='{binding}'"])
     expected = require_h2r_input(cfg)
-    assert expected["human_bundle_id"]
+    assert expected["task_id"] == load_prepared(binding)[1].task_id
+    assert list(cfg.env.observation.sides) == [side for side in ("right", "left") if side in expected["hand_sides"]]
     moved = tmp_path / "prepared"
     shutil.copytree(binding.parent, moved)
     cfg.task.parquet = str(moved / "h2r_binding.json")
     assert require_h2r_input(cfg, expected_binding=expected) == expected
     with pytest.raises(ValueError, match="same sealed H2R input"):
-        require_h2r_input(cfg, expected_binding={**expected, "scene_id": "other"})
-    (moved / "human/reference.npz").write_bytes(b"changed")
-    with pytest.raises(ValueError, match="Input changed"):
+        require_h2r_input(cfg, expected_binding={**expected, "task_id": "other"})
+    (moved / "task/demo/reference.npz").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="changed file"):
         require_h2r_input(cfg)
 
 
 @pytest.mark.parametrize("application", ["train_flash_sac", "view_policy", "evaluate_policy"])
 def test_mixed_native_and_h2r_checkpoint_is_rejected(binding, monkeypatch, application):
-    cfg = compose_config("train_flash_sac", [f"task.parquet={binding}"])
+    cfg = compose_config("train_flash_sac", [f"task.parquet='{binding}'"])
     native = resolved_dict(cfg)
     native["embodiment"] = {"_target_": "flash_chord.embodiments.sharpa_hands.SharpaHands"}
     metadata = {"resolved_config_json": json.dumps(native)}
@@ -96,8 +99,8 @@ def test_prepared_bundle_is_portable_and_detects_changed_inputs(binding, tmp_pat
     shutil.copytree(binding.parent, moved)
     reference = load_h2r(moved / "h2r_binding.json")
     assert all(Path(p).is_relative_to(moved) for p in reference.object_mesh_paths())
-    (moved / "human/reference.npz").write_bytes(b"changed input")
-    with pytest.raises(ValueError, match="Input changed"):
+    (moved / "task/demo/reference.npz").write_bytes(b"changed input")
+    with pytest.raises(ValueError, match="changed file"):
         load_h2r(moved / "h2r_binding.json")
 
 
@@ -107,12 +110,13 @@ def test_native_action_semantics_common_fk_and_physical_rollout(binding):
         "train_flash_sac",
         [
             "experiment=h2r_sharpa_flash_sac",
-            f"task.parquet={binding}",
+            f"task.parquet='{binding}'",
             "scene.world_count=2",
             "logging.mode=disabled",
             "env.voc_scale=0",
         ],
     )
+    require_h2r_input(cfg)
     with wp.ScopedDevice("cuda:0"):
         config = instantiate_typed(cfg.env, RLEnvConfig)
         setup = setup_scene(
@@ -126,41 +130,48 @@ def test_native_action_semantics_common_fk_and_physical_rollout(binding):
             decompose_objects=False,
         )
         scene = setup.scene
-        if setup.reference.metadata.source_dataset == "oakink2":
-            assert len(scene.objects) == len(setup.reference.object_body_names())
-            q = scene.model.joint_q.numpy().reshape(2, -1)
-            for obj in scene.objects:
-                index = obj.root.reference_body_id
-                np.testing.assert_allclose(q[0, list(obj.root.free_q_ids)[:3]],
-                    setup.reference.object_body_pos_w()[0, index], atol=1e-7, rtol=0)
+        # Every interaction object of the task is bound, at its first reference pose.
+        assert [obj.name for obj in scene.objects] == list(setup.reference.task.demo.objects)
+        q = scene.model.joint_q.numpy().reshape(2, -1)
+        for obj in scene.objects:
+            index = obj.root.reference_body_id
+            np.testing.assert_allclose(q[0, list(obj.root.free_q_ids)[:3]],
+                setup.reference.object_body_pos_w()[0, index], atol=1e-7, rtol=0)
+            for joint in obj.articulations:
+                np.testing.assert_allclose(q[0, joint.q_id],
+                    setup.reference.object_articulation()[0, joint.reference_id], atol=1e-7, rtol=0)
         env = RLEnv(scene, setup.reference, config=config)
         env.reset()
+        layout = env.action.buffers.layout
+        assert set(layout.sides) == set(setup.reference.task.hand_sides)
         native = ActionBuffers.build(
             scene.layout,
             scene.robot_reference,
             2,
             config.action,
+            sides=layout.sides,
             num_joint_dof=scene.model.joint_dof_count // 2,
             wrist_dof_ids={hand.side: hand.arm_dof_ids for hand in scene.layout.hands},
         )
-        common = mujoco.MjModel.from_xml_path(str(binding.parent / "robot/robot.xml"))
+        common = mujoco.MjModel.from_xml_path(str(binding.parent / "task/robot/robot.xml"))
         state = mujoco.MjData(common)
+        robot_q = [int(common.joint(name).qposadr[0]) for name in scene.layout.scalar_joints.names]
         rng = np.random.default_rng(7)
         # Exercise the native EMA, normalized residual mapping and regularization
         # over successive calls, then verify the decoded targets by COMMON FK.
         for _ in range(5):
-            action = wp.array(rng.uniform(-0.8, 0.8, 112), dtype=wp.float32)
+            action = wp.array(rng.uniform(-0.8, 0.8, 2 * layout.action_dim), dtype=wp.float32)
             native.process(action, env.timestep, env.state_0)
             env.action.process(action, env.timestep, env.state_0)
             for name in ("processed_target", "action_l2", "action_rate_l2"):
                 np.testing.assert_array_equal(getattr(env.action, name).numpy(), getattr(native, name).numpy())
-            processed = env.action.processed_target.numpy().reshape(2, 58)
+            processed = env.action.processed_target.numpy().reshape(2, layout.processed_dim)
             targets = env.action.joint_target.numpy().reshape(2, -1)
             for world in range(2):
-                state.qpos[:] = targets[world, :56]
+                state.qpos[robot_q] = targets[world, list(scene.layout.scalar_joints.dof_ids)]
                 mujoco.mj_forward(common, state)
-                for side, offset in (("right", 0), ("left", 29)):
-                    palm = state.body(f"{side}_hand_C_MC")
+                for side, offset in zip(layout.sides, layout.hand_processed_starts, strict=True):
+                    palm = state.body(scene.layout.hand(side).palm_frame.name)
                     np.testing.assert_allclose(palm.xpos, processed[world, offset : offset + 3], atol=2e-6, rtol=0)
                     assert abs(np.dot(palm.xquat, processed[world, offset + 3 : offset + 7])) > 1 - 2e-6
             env.control.joint_f.zero_()
@@ -168,7 +179,7 @@ def test_native_action_semantics_common_fk_and_physical_rollout(binding):
             env.action.apply_control(env.state_0, env.control)
             np.testing.assert_array_equal(env.control.joint_f.numpy(), 0)
         env.reset()
-        zero = wp.zeros(112, dtype=wp.float32)
+        zero = wp.zeros(2 * layout.action_dim, dtype=wp.float32)
         for _ in range(8):
             observation, reward, _, _ = env.step(zero)
             assert np.isfinite(observation.numpy()).all()
@@ -187,7 +198,7 @@ def test_control_reference_interpolates_without_changing_task_endpoint(binding):
     assert times[0] == 0 and times[-1] == duration
     assert times[-2] < duration <= times[-2] + 1 / 20 + 1e-12
     np.testing.assert_allclose(np.diff(times[:-1]), 1 / 20, atol=1e-12)
-    for side in ("left", "right"):
+    for side in reference.sides:
         position = np.stack([np.interp(times, source.sample_times_s, col)
                              for col in source.wrist_pos_w(side).T], axis=1)
         np.testing.assert_allclose(reference.wrist_pos_w(side), position, atol=1e-12)
@@ -206,7 +217,7 @@ def test_control_reference_interpolates_without_changing_task_endpoint(binding):
     (20, 6, "physics substeps differ"),
 ])
 def test_resume_requires_the_saved_training_clock(binding, monkeypatch, fps, substeps, message):
-    cfg = compose_config("train_flash_sac", [f"task.parquet={binding}"])
+    cfg = compose_config("train_flash_sac", [f"task.parquet='{binding}'"])
     saved = resolved_dict(cfg)
     saved["env"]["sim"].update(fps=fps, substeps=substeps)
     metadata = {"resolved_config_json": json.dumps(saved)}
@@ -223,7 +234,7 @@ def test_resume_requires_the_saved_training_clock(binding, monkeypatch, fps, sub
     ("ignore", "joint_position_limit_mode is ignore"),
 ])
 def test_resume_requires_the_saved_joint_limit_mode(binding, monkeypatch, saved_mode, message):
-    cfg = compose_config("train_flash_sac", [f"task.parquet={binding}"])
+    cfg = compose_config("train_flash_sac", [f"task.parquet='{binding}'"])
     saved = resolved_dict(cfg)
     if saved_mode is None:  # Checkpoint written before the option existed.
         del saved["env"]["state_validity"]["joint_position_limit_mode"]

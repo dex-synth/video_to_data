@@ -68,7 +68,7 @@ def setup_scene(
         if object_free_joint_damping != 0.0:
             raise ValueError("H2R does not permit extra object damping")
         scene = build_h2r_scene(reference, embodiment, world_count, collision)
-        return SceneSetup(parquet_path, reference, reference.binding_path.parent / "assets" / "support.usda", scene)
+        return SceneSetup(parquet_path, reference, None, scene)  # the task's scene carries its environment
     support_usda = support_usda_for_reference(reference) if include_support else None
     if include_support and support_usda is None:
         raise FileNotFoundError(

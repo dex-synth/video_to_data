@@ -1,5 +1,5 @@
 # @package _global_
-# Historical H2R control recipe; old checkpoints keep their saved configuration.
+# Explicit alternative training clock: 30 Hz control, four 120 Hz physics substeps.
 defaults:
   - h2r_sharpa_flash_sac
   - _self_

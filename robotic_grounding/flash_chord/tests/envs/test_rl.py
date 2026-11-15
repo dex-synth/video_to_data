@@ -144,9 +144,8 @@ def test_h2r_rl_eager_capture_and_zero_copy_jax_parity(h2r_setup, h2r_config):
             "env.critic_context.object_body_velocity=false",
         )
         reference = setup.reference
-        assert reference.fps == 30.0
-        assert setup.support_usda is not None
-        assert eager_env.action.action_dim == 56
+        assert reference.fps == eager_env.config.sim.fps == 20.0
+        assert eager_env.action.action_dim == setup.scene.layout.num_joint_dof
         assert len(eager_env.critic_context_names) == 4
         captured_env = RLEnv(setup.scene, reference, config=eager_env.config)
         jax_native_env = RLEnv(setup.scene, reference, config=eager_env.config)
@@ -208,11 +207,17 @@ def test_h2r_zero_voc_leaves_object_articulation_passive(h2r_setup, h2r_config):
     from flash_chord.training.environment import WarpRLEnv
 
     with wp.ScopedDevice("cuda:0"):
-        _, env = _build_h2r_rl_env(h2r_setup, h2r_config, "env.voc_scale=0.0", "reset.voc_decay_steps=0")
+        setup, env = _build_h2r_rl_env(h2r_setup, h2r_config, "env.voc_scale=0.0", "reset.voc_decay_steps=0")
         action = wp.zeros(2 * env.action.action_dim, dtype=wp.float32)
         articulation_q_ids = np.asarray(env.command.layout.articulation_q_ids)
         articulation_dof_ids = np.asarray(env.command.layout.articulation_dof_ids)
-        assert articulation_q_ids.size > 0
+        if not articulation_q_ids.size:
+            pytest.skip("the task has no object joint")
+        # The passive joint keeps the task's sealed armature and friction; only the assistance vanishes.
+        task = setup.reference.task
+        sealed = [task.compiled["base_scene"]["joints"][joint.name]
+                  for obj in task.demo.objects.values() for joint in obj.joints]
+        frame = setup.reference.num_frames // 2
 
         def displace_object_articulations():
             joint_q = env.state_0.joint_q.numpy()
@@ -225,8 +230,8 @@ def test_h2r_zero_voc_leaves_object_articulation_passive(h2r_setup, h2r_config):
             assert env.object_joint_drive is not None
             armature = env.solver.mjw_model.dof_armature.numpy()
             friction = env.solver.mjw_model.dof_frictionloss.numpy()
-            np.testing.assert_allclose(armature[:, articulation_dof_ids], 0.0)
-            np.testing.assert_allclose(friction[:, articulation_dof_ids], 0.0)
+            np.testing.assert_allclose(armature[:, articulation_dof_ids], [[j["armature"] for j in sealed]] * 2)
+            np.testing.assert_allclose(friction[:, articulation_dof_ids], [[j["friction"] for j in sealed]] * 2)
             position_ids = env.object_joint_drive.position_actuator_ids.numpy()
             velocity_ids = env.object_joint_drive.velocity_actuator_ids.numpy()
             actuator_ids = np.concatenate((position_ids, velocity_ids))
@@ -245,19 +250,19 @@ def test_h2r_zero_voc_leaves_object_articulation_passive(h2r_setup, h2r_config):
         env.step(action)
         assert_articulation_drive_is_passive()
 
-        env.reset(frame_id=100)
+        env.reset(frame_id=frame)
         displace_object_articulations()
         env.step(action)
         assert_articulation_drive_is_passive()
 
-        env.reset(frame_id=100)
+        env.reset(frame_id=frame)
         env.capture_step()
-        env.reset(frame_id=100)
+        env.reset(frame_id=frame)
         displace_object_articulations()
         env.step()
         assert_articulation_drive_is_passive()
 
-        env.reset(frame_id=100)
+        env.reset(frame_id=frame)
         displace_object_articulations()
         jax_env = WarpRLEnv(env, publish_diagnostics=False)
         step = jax_env.step(jnp.zeros((env.world_count, env.action.action_dim), dtype=jnp.float32))
@@ -266,7 +271,7 @@ def test_h2r_zero_voc_leaves_object_articulation_passive(h2r_setup, h2r_config):
 
 
 @pytest.mark.slow
-def test_rl_env_auto_reset_preserves_transition_outputs_and_capture(h2r_setup, h2r_config):
+def test_rl_env_auto_reset_preserves_transition_outputs_and_capture(h2r_setup, h2r_config, h2r_two_hands):
     import warp as wp
 
     from flash_chord.envs.rl import RLEnv, RLEnvConfig
@@ -297,7 +302,7 @@ def test_rl_env_auto_reset_preserves_transition_outputs_and_capture(h2r_setup, h
                         sim=SimConfig(fps=30, substeps=4, njmax=1024, nconmax=256))
 
     with wp.ScopedDevice("cuda:0"):
-        setup = h2r_setup(2)
+        setup = h2r_setup(2, control_fps=30)
         scene, reference = setup.scene, setup.reference
         env = RLEnv(
             scene,
@@ -388,7 +393,7 @@ def test_rl_env_auto_reset_preserves_transition_outputs_and_capture(h2r_setup, h
 
 
 @pytest.mark.slow
-def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable(h2r_setup, h2r_config):
+def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable(h2r_setup, h2r_config, h2r_two_hands):
     import warp as wp
 
     from flash_chord.envs.rl import CriticContextConfig, RLEnv, RLEnvConfig
@@ -425,7 +430,7 @@ def test_rl_env_terminal_state_capture_is_pre_reset_and_graph_capturable(h2r_set
     )
 
     with wp.ScopedDevice("cuda:0"):
-        setup = h2r_setup(2)
+        setup = h2r_setup(2, control_fps=30)
         scene, reference = setup.scene, setup.reference
         env = RLEnv(
             scene,
@@ -524,16 +529,15 @@ def test_nonfinite_world_is_reset_before_next_policy_observation(h2r_setup, h2r_
         inject = wp.array([[1.0e9 if failure == "large_finite_velocity" else float("nan")] * 6],
                           dtype=wp.spatial_vector)
         if failure in ("physics", "large_finite_velocity"):
-            transition = env._transition
+            evaluate = env._evaluate_termination
+            moving_body = env.scene.layout.hands[0].palm_frame.body_id  # the robot's first body is its fixed base
 
             def corrupt_one_world():
-                transition()
-                # Inject after physics, before diagnostics/auto-reset, in one world only.
-                wp.copy(env.state_0.body_qd, inject, count=1)
-                env.terminated.zero_()
-                env.truncated.zero_()
+                # Inject after physics, before the validity check and auto-reset, in one world only.
+                wp.copy(env.state_0.body_qd, inject, dest_offset=moving_body, count=1)
+                evaluate()
 
-            env._transition = corrupt_one_world
+            env._evaluate_termination = corrupt_one_world
         if captured:
             env.capture_step()
             env.reset(frame_id=0)

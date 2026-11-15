@@ -1,2 +1,2 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Sharpa-only H2R input adaptation; no dependency on the benchmark runtime."""
+"""Sharpa adaptation to h2r-bench tasks. `h2r_io` is the vendored loader; nothing imports the benchmark runtime."""

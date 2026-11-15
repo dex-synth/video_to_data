@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Common 56-coordinate Sharpa model, without the native floating ball wrist."""
+"""The task's Sharpa hands with scalar virtual wrists, without the native floating ball wrist."""
 
 from pathlib import Path
 
@@ -11,7 +11,7 @@ from flash_chord.embodiments.binding import build_robot_reference_binding
 from flash_chord.embodiments.frames import capture_body_ids
 from flash_chord.embodiments.sharpa_collision import capture_sharpa_link_geometry, sharpa_object_contact_links
 
-from .inputs import SIDES, WRIST, frame_names, load_binding, robot_bundle
+from .inputs import frame_names, load_prepared
 from .reference import H2rReference
 from .wrist import wrist_coordinates
 
@@ -29,8 +29,8 @@ class H2rSharpaHands:
 
     def __init__(self, binding_path):
         self.binding_path = Path(binding_path).resolve()
-        load_binding(self.binding_path)
-        _, self.semantics, _ = robot_bundle(self.binding_path.parent / "robot")
+        robot = load_prepared(self.binding_path)[1].robot
+        self.semantics, self.sides = robot.semantics, tuple(robot.hands)
 
     def build(self, builder):
         newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
@@ -41,12 +41,12 @@ class H2rSharpaHands:
             parse_mujoco_options=False,
             mesh_maxhullvert=64,
         )
-        names = [name for side in SIDES for name in frame_names(side)]
+        names = [name for side in self.sides for name in frame_names(side)]
         bodies = capture_body_ids(builder, names)
         geometry = capture_sharpa_link_geometry(
             builder,
-            palm_body_ids={s: bodies[f"{s}_hand_C_MC"] for s in SIDES},
-            sides=SIDES,
+            palm_body_ids={s: bodies[frame_names(s)[0]] for s in self.sides},
+            sides=self.sides,
             object_contact_links=sharpa_object_contact_links(),
         )
         # Preserve imported collision exclusions. Do not apply the native hand's extra filters.
@@ -55,9 +55,12 @@ class H2rSharpaHands:
         if set(joints) != set(self.semantics["joint_names"]):
             raise ValueError("Newton changed the common joint set")
         hands = []
-        for side in SIDES:
-            arm = [f"{side}_{axis}_joint" for axis in WRIST]
-            fingers = [n for n in self.semantics["joint_groups"]["fingers"] if n.startswith(side + "_")]
+        for side in self.sides:
+            hand = self.semantics["hands"][side]
+            if hand["wrist_body"] != frame_names(side)[0]:
+                raise ValueError("The robot's wrist body is not the palm frame of the native IK")
+            arm = hand["wrist_translation_joints"] + hand["wrist_rotation_joints"]
+            fingers = hand["finger_joints"]
 
             def qids(names):
                 return tuple(builder.joint_q_start[joints[n]] for n in names)
@@ -68,7 +71,7 @@ class H2rSharpaHands:
             hands.append(
                 HandLayout(
                     side=side,
-                    palm_frame=frames[f"{side}_hand_C_MC"],
+                    palm_frame=frames[frame_names(side)[0]],
                     dp_frames=tuple(frames[n] for n in frame_names(side)[1:6]),
                     fingertip_frames=tuple(frames[n] for n in frame_names(side)[6:]),
                     arm_q_ids=qids(arm),
@@ -98,7 +101,7 @@ class H2rSharpaHands:
         with np.load(self.binding_path.parent / "robot_reference.npz", allow_pickle=False) as data:
             names = list(data["joint_names"])
             q = data["joint_q"][:, [names.index(n) for n in layout.scalar_joints.names]].astype(np.float32)
-        if reference.fps != 30:
+        if reference.metadata.is_resampled:
             initial = q[0].copy()
             q = np.zeros((reference.num_frames, layout.num_joint_q), dtype=np.float32)
             for hand in layout.hands:
@@ -111,8 +114,8 @@ class H2rSharpaHands:
                     previous = wrist[3:]
                 columns = [reference.finger_joint_names(hand.side).index(n) for n in hand.finger_joint_names]
                 q[:, hand.finger_q_ids] = reference.finger_joint_pos(hand.side)[:, columns]
-        if q.shape != (reference.num_frames, 56):
-            raise ValueError("Common robot reference must have 56 coordinates per source frame")
+        if q.shape != (reference.num_frames, layout.num_joint_q):
+            raise ValueError("Common robot reference must have every robot coordinate at every frame")
         binding = build_robot_reference_binding(builder, layout, q, q.copy(), reference.fps)
         for hand in layout.hands:
             bound = binding.hand(hand.side)
@@ -125,7 +128,7 @@ class H2rSharpaHands:
             # At source instants FK must still match the sealed IK. Between
             # samples, use FK of interpolated wrist/fingers, as native Sharpa
             # binding does; linearly interpolated link positions are not FK.
-            source_frames = reference.sample_times_s * 30
+            source_frames = reference.sample_times_s * reference.metadata.source_fps
             exact = np.isclose(source_frames, np.round(source_frames), atol=1e-9, rtol=0)
             np.testing.assert_allclose(bound.dp_pos_w[exact], frames[exact, 1:6], atol=2e-6, rtol=0)
             np.testing.assert_allclose(bound.fingertip_pos_w[exact], frames[exact, 6:], atol=2e-6, rtol=0)

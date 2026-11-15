@@ -28,6 +28,8 @@ def controller():
         pytest.skip("set checkpoint, binding and hello paths for deployment parity")
     checkpoint, binding, hello = (Path(os.environ[key]) for key in keys)
     message = json.loads(hello.read_text())
+    message = message.get("hello", message)  # a hello message, or the client's controller.json
+    message["episodes"] = message["episodes"][:1]  # the parity loop below drives one environment
     # Deliberately differ from model/actuator order; the wire is name based.
     message["joint_names"].reverse()
     return Controller(checkpoint, binding.parent, message)
@@ -102,14 +104,18 @@ def test_h2r_state_observation_actor_and_control_parity(controller):
         env.reset(frame_id=0)
         max_difference = {"observation": 0., "action": 0., "target": 0.}
         contacts_seen = 0
-        for step in range(24):
+        # Run past the first reference contact so that measured contacts enter the features.
+        active = np.max([c.reference.contact_active(side) for side in c.reference.sides], axis=0)
+        steps = min(int(np.argmax(active)) + 24, c.reference.num_frames - 2)
+        for step in range(steps):
             frame = native_frame(c, env, step * c.control_ticks)
             contacts_seen += len(frame["contacts"]["records"])
             if step:
                 # Bench environment geometry (e.g. its world-attached table) has no
                 # method body; such contacts must be ignored without changing features.
                 frame["contacts"]["records"].append({
-                    "body1": "left_middle_DP", "body2": "world", "point1_local": [0., 0., 0.],
+                    "body1": next(name for name in c.body_names if name.endswith("_middle_DP")),
+                    "body2": "world", "point1_local": [0., 0., 0.],
                     "point2_local": [0., 0., 0.], "force_on_body2_world": [0., 0., 1.]})
             native_obs = env.observation_strategy.compute(env.state_0).numpy().reshape(1, -1)
             native_action, _ = gpu_policy(gpu_actor, jax.device_put(native_obs, gpu), gpu_key)
@@ -133,27 +139,28 @@ def test_h2r_state_observation_actor_and_control_parity(controller):
         print("deployment parity", max_difference, "raw contacts", contacts_seen)
 
 
-@pytest.mark.parametrize("field,value", [("control_ticks", 5), ("dt_s", 0.01), ("end_tick", 1)])
-def test_checkpoint_rejects_incompatible_task_clock(controller, field, value):
-    from copy import deepcopy
+@pytest.mark.parametrize("field,value,message", [
+    ("protocol", "h2r-evaluation-v1", "Unsupported evaluation protocol 'h2r-evaluation-v1'"),
+    ("task_id", "0" * 64, "different task"),
+    ("dt_s", 0.03, "not a whole number"),  # 20 Hz control is not a multiple of a 30 ms physics step
+])
+def test_controller_rejects_other_protocols_tasks_and_clocks(controller, field, value, message):
+    hello = {**controller.hello, field: value}
+    with pytest.raises(ValueError, match=message):
+        Controller(os.environ["FLASHCHORD_H2R_CHECKPOINT"], controller.reference.binding_path.parent, hello)
 
-    hello = deepcopy(controller.hello)
-    hello[field] = value
-    with pytest.raises(ValueError, match="Task clock"):
-        Controller(os.environ["FLASHCHORD_H2R_CHECKPOINT"],
-                   controller.reference.binding_path.parent, hello)
 
-
-@pytest.mark.parametrize("physics_hz", [120, 300])
+@pytest.mark.parametrize("physics_hz", [100, 300, 600])
 def test_deployment_physics_clock_is_independent_of_training(controller, physics_hz):
-    from copy import deepcopy
-
-    hello = deepcopy(controller.hello)
-    hello["dt_s"] = 1 / physics_hz
-    hello["control_ticks"] = round(controller.control_dt * physics_hz)
-    hello["end_tick"] = round(controller.binding["duration_s"] * physics_hz)
+    hello = {**controller.hello, "dt_s": 1 / physics_hz,
+             "end_tick": round(controller.binding["duration_s"] * physics_hz)}
     deployed = Controller(os.environ["FLASHCHORD_H2R_CHECKPOINT"],
                           controller.reference.binding_path.parent, hello)
-    assert deployed.control_dt == controller.control_dt
-    assert deployed.start()["requirements"]["control_dt_s"] == controller.control_dt
+    # The declared period is the trained one; only the number of evaluation ticks per period changes.
+    assert deployed.control_dt == controller.control_dt == 1 / 20
+    assert deployed.control_ticks == physics_hz // 20
+    start = deployed.start()
+    assert start["requirements"] == {"bodies": list(deployed.observed_bodies.values()), "contacts": True,
+                                     "control_dt_s": controller.control_dt}
+    assert start["binding"]["method"] == "flashchord" and start["task_id"] == controller.binding["task_id"]
     assert deployed.saved_config["env"]["sim"] == controller.saved_config["env"]["sim"]

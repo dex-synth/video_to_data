@@ -3,8 +3,6 @@
 """Simulation timing + solver configuration (the single source of truth for physics knobs).
 
 Training and replay here use MuJoCo-Warp through Newton's ``SolverMuJoCo``.
-Standalone evaluation on the exact common CPU task is implemented separately in
-``flash_chord.h2r.cpu_evaluation``; changing a Warp device is not that CPU path.
 ``solver`` / ``integrator`` / ``cone`` are MuJoCo solver settings (the constraint solver algorithm,
 time integrator, and friction cone), not engine choices. Both the replay and the RL/MPPI env consume
 one :class:`SimConfig`.
@@ -66,12 +64,13 @@ def build_solver(model, cfg: SimConfig):
         "iterations": cfg.iterations,
         "ls_iterations": cfg.ls_iterations,
     }
-    settings = getattr(model, "h2r_settings", None)
-    if settings is not None:
+    task = getattr(model, "h2r_task", None)
+    if task is not None:
+        settings = task.demo.settings
         if (cfg.fps, cfg.substeps) not in TRAINING_CLOCKS or not cfg.use_mujoco_contacts:
             raise ValueError("H2R requires 20/5 training clock (historical: 20/6 or 30/4) and MuJoCo contacts")
-        # Training uses its saved integration clock, independently of the sealed
-        # task's evaluation timestep. All other common physics settings remain.
+        # Training uses its own integration clock, independently of the task's
+        # nominal timestep and of the evaluation. All other common physics settings remain.
         # The environment passes cfg.sim_dt to every solver.step call.
         options.update({name: settings[name] for name in (*options, "tolerance")})
         for name in ("solver", "integrator", "cone"):
@@ -84,11 +83,11 @@ def build_solver(model, cfg: SimConfig):
         enable_multiccd=True,
         **options,
     )
-    if settings is not None:
+    if task is not None:
         from flash_chord.h2r.validation import restore_joint_force_limits, validate_solver
 
-        restore_joint_force_limits(solver, model.h2r_binding_path)
-        validate_solver(solver, model.h2r_binding_path)
+        restore_joint_force_limits(solver, task)
+        validate_solver(solver, task)
     return solver
 
 

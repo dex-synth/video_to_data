@@ -1,58 +1,22 @@
-"""Run the native FlashCHORD controller against an h2r_bench Unix socket."""
+"""Run the native FlashCHORD controller against an h2r_bench evaluation socket (h2r-evaluation-v2)."""
 
 import argparse
 import json
-import math
 import os
 from pathlib import Path
 import socket
-import struct
 import time
 
 from .controller import Controller
-from .inputs import digest, write_json
-
-MAX_MESSAGE_BYTES = 32 * 1024 * 1024
-
-
-def send(stream, value):
-    payload = json.dumps(value, allow_nan=False, separators=(",", ":")).encode()
-    if len(payload) > MAX_MESSAGE_BYTES:
-        raise ValueError("Protocol message too large")
-    stream.sendall(struct.pack("!I", len(payload)) + payload)
+from .h2r_io.client import receive, send
+from .inputs import write_json
 
 
-def receive(stream):
-    def read(count):
-        result = bytearray()
-        while len(result) < count:
-            block = stream.recv(count - len(result))
-            if not block:
-                raise EOFError("Evaluation server disconnected")
-            result.extend(block)
-        return result
-
-    def pairs(values):
-        result = {}
-        for key, value in values:
-            if key in result:
-                raise ValueError(f"Duplicate field: {key}")
-            result[key] = value
-        return result
-
-    def number(value):
-        result = float(value)
-        if not math.isfinite(result):
-            raise ValueError("Non-finite protocol value")
-        return result
-
-    size, = struct.unpack("!I", read(4))
-    if not 0 < size <= MAX_MESSAGE_BYTES:
-        raise ValueError("Invalid protocol message size")
-    value = json.loads(read(size), object_pairs_hook=pairs, parse_constant=number, parse_float=number)
-    if not isinstance(value, dict) or value.get("type") == "error":
-        raise ValueError(f"Invalid server response: {value}")
-    return value
+def expect(stream, kind):
+    message = receive(stream)
+    if message.get("type") != kind:
+        raise ValueError(f"Expected {kind} from the evaluation server, got {message}")
+    return message
 
 
 def main():
@@ -68,22 +32,18 @@ def main():
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(args.timeout_s)
         stream.connect(args.socket)
-        hello = receive(stream)
-        if hello.get("type") != "hello":
-            raise ValueError("Expected hello")
+        hello = expect(stream, "hello")
         controller = Controller(args.checkpoint, args.prepared, hello, device=args.device)
-        manifest = {"checkpoint": str(args.checkpoint.resolve()), "checkpoint_sha256": digest(args.checkpoint),
-                    "prepared": str(args.prepared.resolve()), "task_id": hello["task_id"],
-                    "deterministic": True, "device": args.device,
-                    "policy_batch_size": 1, "xla_flags": os.environ["XLA_FLAGS"], "hello": hello,
-                    "checkpoint_config": controller.saved_config}
-        write_json(args.output / "controller.json", manifest)
-        send(stream, controller.start())
+        start = controller.start()
+        write_json(args.output / "controller.json", {
+            "binding": start["binding"], "prepared": str(args.prepared.resolve()), "task_id": hello["task_id"],
+            "control_dt_s": controller.control_dt, "control_ticks": controller.control_ticks,
+            "deterministic": True, "device": args.device, "policy_batch_size": 1,
+            "xla_flags": os.environ["XLA_FLAGS"], "hello": hello, "checkpoint_config": controller.saved_config})
+        send(stream, start)
         with (args.output / "controls.jsonl").open("x") as log:
             while True:
-                message = receive(stream)
-                if message.get("type") != "frames":
-                    raise ValueError("Expected frames")
+                message = expect(stream, "frames")
                 if message["done"]:
                     write_json(args.output / "result.json", message)
                     break
@@ -93,6 +53,9 @@ def main():
                                       **diagnostics}, allow_nan=False) + "\n")
                 log.flush()
                 send(stream, command)
+    for episode in message["episodes"]:
+        print(f"episode {episode['episode_id']} (seed {episode['seed']}): {episode.get('reason')} "
+              f"at tick {episode['tick']}", flush=True)
 
 
 if __name__ == "__main__":

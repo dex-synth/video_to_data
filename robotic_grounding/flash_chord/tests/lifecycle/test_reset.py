@@ -189,10 +189,10 @@ def test_h2r_reset_uses_bound_named_joint_and_semantic_frame_trajectories(h2r_se
 
     from flash_chord.lifecycle.reset import ReferenceResetTable, reset_worlds
 
-    frame = 100
     with wp.ScopedDevice("cuda:0"):
         setup = h2r_setup(1)
         scene, reference = setup.scene, setup.reference
+        frame = reference.num_frames // 2
         table = ReferenceResetTable.build(scene, reference)
         state = scene.model.state()
         state.joint_qd.assign(np.ones(scene.model.joint_dof_count, dtype=np.float32))
@@ -219,12 +219,11 @@ def test_h2r_reset_uses_bound_named_joint_and_semantic_frame_trajectories(h2r_se
             hand_reference.dp_pos_w[frame],
             atol=2.0e-6,
         )
-    assert len(scene.objects) == 1 and len(scene.objects[0].articulations) == 1
-    articulation = scene.objects[0].articulations[0]
-    np.testing.assert_allclose(
-        joint_q[articulation.q_id],
-        reference.object_articulation()[frame, articulation.reference_id],
-    )
+    for articulation in (joint for obj in scene.objects for joint in obj.articulations):
+        np.testing.assert_allclose(
+            joint_q[articulation.q_id],
+            reference.object_articulation()[frame, articulation.reference_id],
+        )
 
 
 def test_reference_reset_samples_random_frames_open_fingers_and_first_frame_override():

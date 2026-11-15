@@ -36,10 +36,13 @@ from flash_chord.training.flash_sac.evaluation import load_policy_for_inference
 from flash_chord.utils.quat import quat_rotate_xyzw
 
 from .action import H2rActionConfig
-from .inputs import TRAINING_CLOCKS, load_binding
+from .h2r_io import client
+from .inputs import BINDING, TRAINING_CLOCKS, load_prepared, sha256
 from .reference import load_h2r
 from .robot import H2rSharpaHands
 from .scene import build_h2r_scene
+
+METHOD = "flashchord"  # the method identity reported in the evaluation binding
 
 
 def finite_array(value, shape, name):
@@ -61,37 +64,32 @@ class Controller:
         if not self.ids or len(set(self.ids)) != len(self.ids):
             raise ValueError("Episode IDs must be nonempty and unique")
         self.count = len(self.ids)
-        prepared = Path(prepared).resolve()
-        binding_path = prepared / "h2r_binding.json"
-        self.binding = load_binding(binding_path)
-        for key, source in (("bundle_id", "human_bundle_id"),
-                            ("robot_manifest_sha256", "robot_manifest_sha256"),
-                            ("robot_name", "robot_name"), ("source_frame_range", "source_frame_range")):
-            if hello[key] != self.binding[source]:
-                raise ValueError(f"Controller input differs from task: {key}")
+        binding_path = Path(prepared).resolve() / BINDING
+        self.binding, _ = load_prepared(binding_path)
+        if hello.get("protocol") != client.PROTOCOL:
+            raise ValueError(f"Unsupported evaluation protocol {hello.get('protocol')!r}: "
+                             f"this controller speaks {client.PROTOCOL}")
+        if hello["task_id"] != self.binding["task_id"]:
+            raise ValueError("The evaluation runs a different task than the one this preparation was made for")
         obs = hello["observation"]
-        if (hello["protocol"] != "h2r-evaluation-v1" or obs.get("contacts") is not True
-                or obs.get("contact_schema") != "h2r-body-contacts-v1"
+        if (obs.get("contacts") is not True or obs.get("contact_schema") != "h2r-body-contacts-v1"
                 or obs["quaternion"] != "wxyz" or obs["body_velocity"] != "world_at_body_origin"):
             raise ValueError("Unsupported physical observation contract")
+        self.checkpoint = Path(checkpoint).resolve()
         metadata = read_checkpoint_metadata(checkpoint)
         self.saved_config = checkpoint_config(metadata)
         cfg = OmegaConf.create(self.saved_config)
-        trained_binding = load_binding(Path(cfg.embodiment.binding_path))
-        if trained_binding != self.binding:
+        if load_prepared(cfg.embodiment.binding_path)[0] != self.binding:
             raise ValueError("Checkpoint preparation differs from deployment input")
         env = cfg.env
         if (env.arm_position_integral.gain_s_inv2 != 0 or env.enforce_joint_velocity_limits
                 or env.action.delay.min_steps != 0 or env.action.delay.max_steps != 0
                 or (env.sim.fps, env.sim.substeps) not in TRAINING_CLOCKS):
             raise ValueError("Deployment requires the trained 20/30 Hz, zero-delay position controller")
+        # The policy keeps its trained control period. The evaluation owns the physics step:
+        # only its announced step tells how many ticks one period spans.
         self.control_dt = 1 / env.sim.fps
-        # Match policy time, not training substeps: the bench owns integration.
-        self.control_ticks = hello["control_ticks"]
-        if (type(self.control_ticks) is not int or self.control_ticks <= 0
-                or not np.isclose(self.control_ticks * hello["dt_s"], self.control_dt, rtol=0, atol=1e-12)
-                or not np.isclose(hello["end_tick"] * hello["dt_s"], self.binding["duration_s"], rtol=0, atol=1e-12)):
-            raise ValueError("Task clock differs from trained H2R reference")
+        self.control_ticks = client.control_ticks(hello, self.control_dt)
         self.reference = load_h2r(binding_path, control_fps=env.sim.fps)
         validate_reference_config(self.saved_config, self.reference)
         with wp.ScopedDevice(self.device):
@@ -145,19 +143,19 @@ class Controller:
             previous = self.shape_by_body.setdefault(name, shape)
             if roles[shape] != roles[previous]:
                 raise ValueError(f"Body-level contacts cannot represent different shape roles: {name}")
-        with np.load(prepared / "robot_reference.npz", allow_pickle=False) as data:
+        with np.load(binding_path.parent / "robot_reference.npz", allow_pickle=False) as data:
             self.initial = dict(zip(data["joint_names"].tolist(), data["joint_q"][0].tolist()))
         self.last_tick = {identity: -self.control_ticks for identity in self.ids}
         self.finished = set()
 
     def start(self):
-        return {"type": "start", "task_id": self.hello["task_id"],
-                "binding": {"bundle_id": self.binding["human_bundle_id"],
-                            "robot_manifest_sha256": self.binding["robot_manifest_sha256"],
-                            "method": "flashchord", "controller": "flashchord.h2r.evaluation"},
-                "requirements": {"bodies": list(self.observed_bodies.values()), "contacts": True,
-                                 "control_dt_s": self.control_dt},
-                "initial_robot": {identity: self.initial for identity in self.ids}}
+        """Every episode starts at the reference's first frame; the period is the trained control period."""
+        information = {"name": "flash_chord.h2r.evaluation", "checkpoint": str(self.checkpoint),
+                       "checkpoint_sha256": sha256(self.checkpoint)}
+        return client.start_request(
+            self.hello, method=METHOD, controller=information, control_dt_s=self.control_dt,
+            initial_robot={identity: self.initial for identity in self.ids},
+            bodies=list(self.observed_bodies.values()), contacts=True)
 
     def update(self, frames):
         """Populate native state and contacts exclusively from evaluation observations."""

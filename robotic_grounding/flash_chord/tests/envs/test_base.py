@@ -35,7 +35,7 @@ def test_finish_transition_distinguishes_termination_truncation_and_active_world
     assert episode_step.numpy().tolist() == [10, 20, 30, 41]
 
 
-def test_base_env_eager_and_captured_transition_agree(h2r_setup):
+def test_base_env_eager_and_captured_transition_agree(h2r_setup, h2r_two_hands):
     import warp as wp
 
     from flash_chord.envs.base import BaseEnv, BaseEnvConfig
@@ -53,7 +53,7 @@ def test_base_env_eager_and_captured_transition_agree(h2r_setup):
     from flash_chord.runtime.sim import SimConfig
 
     with wp.ScopedDevice("cuda:0"):
-        setup = h2r_setup()
+        setup = h2r_setup(control_fps=30)
         scene, reference = setup.scene, setup.reference
         action_strategy = H2rActionConfig(delay=TargetDelayConfig(min_steps=2, max_steps=2)).build(scene)
         objective_config = ObjectiveConfig(

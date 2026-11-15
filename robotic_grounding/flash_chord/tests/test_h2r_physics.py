@@ -1,4 +1,4 @@
-"""Compare actual H2R dynamics to an independently supplied common MuJoCo scene."""
+"""Compare actual H2R training dynamics to the task's own assembled MuJoCo scene."""
 
 import os
 from pathlib import Path
@@ -11,10 +11,11 @@ from scipy.spatial.transform import Rotation
 
 from flash_chord.configuration import compose_config, instantiate_typed
 from flash_chord.envs.rl import RLEnv, RLEnvConfig
+from flash_chord.h2r.configuration import require_h2r_input
 from flash_chord.h2r.reference import load_h2r
 from flash_chord.h2r.robot import H2rSharpaHands
 from flash_chord.h2r.scene import build_h2r_scene
-from flash_chord.h2r.validation import validate_solver
+from flash_chord.h2r.validation import named_id, task_model, validate_solver
 from flash_chord.scene.collision import CollisionPolicy
 
 pytestmark = pytest.mark.gpu
@@ -23,51 +24,61 @@ pytestmark = pytest.mark.gpu
 @pytest.fixture(scope="module")
 def physics():
     binding = os.environ.get("FLASHCHORD_H2R_BINDING")
-    scene_path = os.environ.get("FLASHCHORD_H2R_SCENE")
-    if not binding or not scene_path:
-        pytest.skip("set FLASHCHORD_H2R_BINDING and FLASHCHORD_H2R_SCENE for physical parity")
+    if not binding:
+        pytest.skip("set FLASHCHORD_H2R_BINDING to a prepared h2r_binding.json for physical parity")
     binding = Path(binding)
     cfg = compose_config("train_flash_sac", [
-        "experiment=h2r_sharpa_flash_sac", f"task.parquet={binding}",
+        "experiment=h2r_sharpa_flash_sac", f"task.parquet='{binding}'",
         "scene.world_count=1", "env.auto_reset=false", "env.voc_scale=0",
         "env.voc.max_force=0", "env.voc.max_torque=0", "logging.mode=disabled",
     ])
+    require_h2r_input(cfg)
     with wp.ScopedDevice("cuda:0"):
         reference = load_h2r(binding, control_fps=cfg.env.sim.fps)
         scene = build_h2r_scene(reference, H2rSharpaHands(binding), 1, CollisionPolicy(ground=False))
         env = RLEnv(scene, reference, instantiate_typed(cfg.env, RLEnvConfig))
-    return env, mujoco.MjModel.from_xml_path(scene_path), binding
+    # The comparison model is the sealed task's assembled scene, never one derived from the method model.
+    return env, task_model(reference.task), reference.task
 
 
 def test_fixed_support_and_active_solver_guards(physics):
-    env, common, binding = physics
+    env, common, task = physics
     solver, gpu = env.solver, env.solver.mjw_model
     assert solver.mj_model.nv == common.nv
     np.testing.assert_allclose(gpu.stat.meaninertia.numpy(), common.stat.meaninertia, rtol=2e-4)
     assert not gpu.opt.disableflags & int(mujoco.mjtDisableBit.mjDSBL_MULTICCD)
-    validate_solver(solver, binding)
+    validate_solver(solver, task)
 
     # Check the active GPU state, not just the CPU inspection model.
     original = gpu.stat.meaninertia.numpy()
     try:
         gpu.stat.meaninertia.fill_(1e9)
         with pytest.raises(ValueError, match="GPU meaninertia"):
-            validate_solver(solver, binding)
+            validate_solver(solver, task)
     finally:
         gpu.stat.meaninertia.assign(original)
     original_flags = gpu.opt.disableflags
     try:
         gpu.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_MULTICCD)
         with pytest.raises(ValueError, match="GPU physics disable flags"):
-            validate_solver(solver, binding)
+            validate_solver(solver, task)
     finally:
         gpu.opt.disableflags = original_flags
 
 
-def test_same_initial_state_and_targets_in_common_physics(physics):
+@pytest.mark.parametrize("lift_m", [0.0, 1.0])
+def test_same_initial_state_and_targets_in_common_physics(physics, lift_m):
+    """Same state and targets in the method model and in the task model, both stepped by MJWarp.
+
+    With the objects raised into free fall the two must agree to rounding: masses, inertias,
+    joints, gravity and integration are the task's. At the reference pose the objects rest on
+    their supports; convex-mesh contact points then depend on the imported mesh data, so only
+    a short-horizon bound is checked.
+    """
     from copy import deepcopy
 
     import mujoco_warp as mjwarp
+    import newton
 
     env, common, _ = physics
     # Compare asset import at the training timestep. The sealed evaluation
@@ -75,6 +86,12 @@ def test_same_initial_state_and_targets_in_common_physics(physics):
     common = deepcopy(common)
     common.opt.timestep = env.config.sim.sim_dt
     env.reset(frame_id=0)
+    if lift_m:
+        q = env.state_0.joint_q.numpy()
+        for obj in env.scene.objects:
+            q[obj.root.free_q_ids[2]] += lift_m
+        env.state_0.joint_q.assign(q)
+        newton.eval_fk(env.model, env.state_0.joint_q, env.state_0.joint_qd, env.state_0)
     data = mujoco.MjData(common)
     layout = env.scene.layout.scalar_joints
     q_ids = [int(common.joint(n).qposadr[0]) for n in layout.names]
@@ -82,11 +99,17 @@ def test_same_initial_state_and_targets_in_common_physics(physics):
     actuator_ids = [int(np.flatnonzero(common.actuator_trnid[:, 0] == common.joint(n).id)[0])
                     for n in layout.names]
     data.qpos[q_ids] = env.state_0.joint_q.numpy()[list(layout.q_ids)]
-    root = int(common.joint("object_free").qposadr[0])
+    task = env.reference.task
+    parts = env.reference.object_body_names()
+    hinges = [joint.mjcf_name for obj in task.demo.objects.values() for joint in obj.joints]
     # Both runtimes initialize through float32 coordinates; preserve that boundary.
-    data.qpos[root:root + 3] = env.reference.object_body_pos_w()[0, 0].astype(np.float32)
-    data.qpos[root + 3:root + 7] = env.reference.object_body_quat_w()[0, 0].astype(np.float32)
-    data.qpos[int(common.joint("object_hinge").qposadr[0])] = np.float32(env.reference.object_articulation()[0, 0])
+    for obj in task.demo.objects.values():
+        root, index = int(common.joint(obj.root_joint).qposadr[0]), parts.index(obj.root_part)
+        data.qpos[root:root + 3] = env.reference.object_body_pos_w()[0, index].astype(np.float32)
+        data.qpos[root + 2] = np.float32(np.float32(data.qpos[root + 2]) + np.float32(lift_m))
+        data.qpos[root + 3:root + 7] = env.reference.object_body_quat_w()[0, index].astype(np.float32)
+    for column, name in enumerate(hinges):
+        data.qpos[int(common.joint(name).qposadr[0])] = np.float32(env.reference.object_articulation()[0, column])
     mujoco.mj_forward(common, data)
     # Both worlds use the same physics backend. CPU MuJoCo is used below
     # only to inspect post-integration kinematics, never to advance physics.
@@ -98,15 +121,13 @@ def test_same_initial_state_and_targets_in_common_physics(physics):
         action = wp.array(np.full(env.action.action_dim, 0.1 * (-1) ** step, np.float32), device=env.device)
         env.step(action)
         if step == 0:
-            from flash_chord.h2r.validation import named_id
-
-            # VOC=0 must also disable the method's implicit hinge servos.
+            # VOC=0 must also disable the method's implicit servo on every object joint.
             native = env.solver.mj_model
-            hinge = named_id(native, "joint", "object_hinge")
-            assist = np.flatnonzero(native.actuator_trnid[:, 0] == hinge)
-            assert len(assist) > 0
-            for field in ("actuator_gainprm", "actuator_biasprm"):
-                np.testing.assert_array_equal(getattr(env.solver.mjw_model, field).numpy()[:, assist], 0)
+            for name in hinges:
+                assist = np.flatnonzero(native.actuator_trnid[:, 0] == named_id(native, "joint", name))
+                assert len(assist) > 0
+                for field in ("actuator_gainprm", "actuator_biasprm"):
+                    np.testing.assert_array_equal(getattr(env.solver.mjw_model, field).numpy()[:, assist], 0)
         targets = env.action.joint_target.numpy()[list(layout.dof_ids)]
         data.ctrl[actuator_ids] = targets
         gpu_data.ctrl.assign(data.ctrl[None, :].astype(np.float32))
@@ -120,25 +141,25 @@ def test_same_initial_state_and_targets_in_common_physics(physics):
         # Refresh post-integration poses without advancing either world.
         mujoco.mj_kinematics(common, data)
         native = env.state_0.body_q.numpy()
-        for body_id, name in zip(env.command.layout.body_ids, ("object_bottom", "object_top")):
+        for body_id, name in zip(env.command.layout.body_ids, (task.object_binding["parts"][p] for p in parts)):
             observed = data.body(name)
             position_errors.append(float(np.linalg.norm(native[body_id, :3] - observed.xpos)))
             delta = Rotation.from_quat(native[body_id, 3:]).inv() * Rotation.from_quat(observed.xquat[[1, 2, 3, 0]])
             rotation_errors.append(float(delta.magnitude()))
-    assert contacts_seen > 0
-    # The imported float32 mesh/FK model need not choose identical contact
-    # manifolds. Bound short-horizon motion independently of the tight servo check.
-    assert max(position_errors) < 1e-3  # 1 mm over four control intervals
-    assert max(rotation_errors) < 5e-3  # 0.29 degrees
+    if lift_m:
+        assert max(position_errors) < 1e-6 and max(rotation_errors) < 1e-6
+    else:
+        assert contacts_seen > 0
+        # The imported float32 mesh/FK model need not choose identical contact
+        # manifolds. Bound short-horizon motion independently of the tight servo check.
+        assert max(position_errors) < 1e-3  # 1 mm over four control intervals
+        assert max(rotation_errors) < 1e-2  # 0.57 degrees
 
 
 def test_training_advances_at_100hz_without_changing_common_timestep(physics):
-    from flash_chord.h2r.inputs import read_json
-
-    env, common, binding = physics
-    settings = read_json(binding.parent / "human/scene.json")["settings"]
+    env, common, task = physics
     original_common_dt = common.opt.timestep
-    assert env.scene.model.h2r_settings["timestep_s"] == settings["timestep_s"]
+    assert original_common_dt == task.timestep_s  # the task's nominal step is not the training step
     assert (env.config.sim.fps, env.config.sim.substeps) == (20, 5)
     env.reset(frame_id=0)
     before = env.solver.mjw_data.time.numpy().copy()
@@ -146,14 +167,14 @@ def test_training_advances_at_100hz_without_changing_common_timestep(physics):
     np.testing.assert_allclose(env.solver.mjw_data.time.numpy() - before, 0.05, atol=1e-6)
     np.testing.assert_allclose(env.solver.mjw_model.opt.timestep.numpy(), 0.01, atol=1e-8)
     assert common.opt.timestep == original_common_dt
-    assert env.scene.model.h2r_settings["timestep_s"] == settings["timestep_s"]
 
 
 def test_masked_reset_discards_solver_and_contact_history(physics):
     """A captured reset must recover poisoned worlds without resetting peers."""
     from dataclasses import replace
 
-    original, _, binding = physics
+    original, _, task = physics
+    binding = original.reference.binding_path
     with wp.ScopedDevice("cuda:0"):
         scene = build_h2r_scene(original.reference, H2rSharpaHands(binding), 2,
                                CollisionPolicy(ground=False))
@@ -207,7 +228,8 @@ def test_masked_reset_discards_solver_and_contact_history(physics):
 def test_immediate_training_reset_matches_deployment_state_and_clock(physics):
     from dataclasses import replace
 
-    original, _, binding = physics
+    original, _, task = physics
+    binding = original.reference.binding_path
     config = replace(original.config, reset=replace(
         original.config.reset, immediate_first_frame_probability=1.0))
     with wp.ScopedDevice("cuda:0"):
@@ -233,7 +255,8 @@ def test_immediate_training_reset_matches_deployment_state_and_clock(physics):
 def test_sampled_frame_zero_skips_preamble_in_physical_training_step(physics):
     from dataclasses import replace
 
-    original, _, binding = physics
+    original, _, task = physics
+    binding = original.reference.binding_path
     config = replace(original.config, reset=replace(
         original.config.reset, always_reset_to_first_frame=True,
         immediate_first_frame_probability=0.0, skip_first_frame_settling=True))

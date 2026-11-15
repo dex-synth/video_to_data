@@ -27,15 +27,22 @@ def _scene(binding, world_count, **kwargs):
 
 
 def test_scene_assembles_and_replicates(h2r_binding):
+    from flash_chord.h2r.inputs import load_prepared
+
+    task = load_prepared(h2r_binding)[1]
     s1 = _scene(h2r_binding, 1)
-    assert len(s1.objects) == 1  # common articulated object
+    assert [obj.name for obj in s1.objects] == list(task.demo.objects)  # every interaction object of the task
+    assert s1.layout.sides == tuple(task.hand_sides)
     assert s1.robot_reference.num_frames > 1
     assert s1.robot_reference.fps == 30.0
     assert s1.robot_reference.num_joint_q == s1.layout.num_joint_q
     assert s1.robot_reference.num_joint_dof == s1.layout.num_joint_dof
-    assert s1.robot_reference.hand("left").finger_joint_pos.shape == (s1.robot_reference.num_frames, 22)
-    # One common robot plus an object with a free root and a hinge.
-    assert s1.model.joint_dof_count == s1.layout.num_joint_dof + 7 * len(s1.objects)
+    for hand in s1.layout.hands:
+        assert s1.robot_reference.hand(hand.side).finger_joint_pos.shape == (
+            s1.robot_reference.num_frames, len(hand.finger_joint_names))
+    # The task's robot plus, per object, a free root and its hinge joints.
+    hinges = sum(len(obj.articulations) for obj in s1.objects)
+    assert s1.model.joint_dof_count == s1.layout.num_joint_dof + 6 * len(s1.objects) + hinges
     assert s1.model.contacts().force is not None
     np.testing.assert_array_equal(s1.object_scales, 1.0)
     np.testing.assert_array_equal(s1.object_root_position_offsets_w, 0.0)
@@ -55,7 +62,7 @@ def test_common_scene_rejects_extra_object_damping_and_keeps_common_friction(h2r
     scene = _scene(h2r_binding, 1, contact_friction=0.5)
     active = (scene.model.shape_flags.numpy() & int(newton.ShapeFlags.COLLIDE_SHAPES)) != 0
     np.testing.assert_allclose(
-        scene.model.shape_material_mu.numpy()[active], scene.model.h2r_settings["contact"]["friction"][0],
+        scene.model.shape_material_mu.numpy()[active], scene.model.h2r_task.demo.settings["contact"]["friction"][0],
     )
 
 
@@ -76,7 +83,7 @@ def test_scene_rejects_semantic_frames_outside_the_replicated_world_layout(h2r_b
     from flash_chord.embodiments.base import BodyFrame
 
     scene = _scene(h2r_binding, 1)
-    left = scene.layout.hand("left")
+    left = scene.layout.hands[0]
     invalid_body_id = scene.model.body_count
     invalid_left = replace(
         left,
@@ -88,7 +95,7 @@ def test_scene_rejects_semantic_frames_outside_the_replicated_world_layout(h2r_b
     )
     invalid_layout = replace(
         scene.layout,
-        hands=tuple(invalid_left if hand.side == "left" else hand for hand in scene.layout.hands),
+        hands=tuple(invalid_left if hand.side == left.side else hand for hand in scene.layout.hands),
         semantic_frames=semantic_frames,
     )
 

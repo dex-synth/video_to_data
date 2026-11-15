@@ -93,7 +93,7 @@ class H2rHandPoseAction(ResidualHandPoseAction):
     @classmethod
     def build(cls, scene, config=None, device=None):
         config = config or H2rActionConfig()
-        sides = ("right", "left")
+        sides = tuple(side for side in ("right", "left") if side in scene.layout.sides)  # native order
         dofs = scene.model.joint_dof_count // scene.world_count
         mappings = {s: scene.layout.hand(s).arm_dof_ids for s in sides}
         buffers = ActionBuffers.build(
@@ -101,6 +101,7 @@ class H2rHandPoseAction(ResidualHandPoseAction):
             scene.robot_reference,
             scene.world_count,
             config,
+            sides=sides,
             num_joint_dof=dofs,
             device=device,
             wrist_dof_ids=mappings,
@@ -110,11 +111,12 @@ class H2rHandPoseAction(ResidualHandPoseAction):
             delay = TargetDelayBuffer.build(
                 world_count=scene.world_count,
                 num_joint_dof=dofs,
-                delayed_dof_ids=tuple(range(56)),
+                delayed_dof_ids=tuple(scene.layout.scalar_joints.dof_ids),
                 config=config.delay,
                 device=device,
             )
-        # Validate this Sharpa-specific chain against imported FK before using analytic decoding.
+        # The analytic decoding assumes world-aligned XYZ slides followed by intrinsic XYZ hinges;
+        # preparation checks that chain against FK at random poses, here its zero pose is checked.
         import newton
 
         state = scene.model.state()
@@ -132,9 +134,6 @@ class H2rHandPoseAction(ResidualHandPoseAction):
             )
             bases.append(list(transform.p))
             np.testing.assert_allclose(transform.q, [0, 0, 0, 1], atol=1e-6)
-            names = scene.layout.hand(side).arm_joint_names
-            if names != tuple(f"{side}_{a}_joint" for a in ("x", "y", "z", "roll", "pitch", "yaw")):
-                raise ValueError("Unsupported common wrist chain")
         return cls(
             buffers=buffers,
             wrist=PositionController(),

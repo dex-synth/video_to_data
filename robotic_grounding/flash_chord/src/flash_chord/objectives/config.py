@@ -177,6 +177,7 @@ class ObjectiveConfig:
     sides: tuple[str, ...] = ("right", "left")
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "sides", tuple(self.sides))
         if self.num_wrench_basis <= 0:
             raise ValueError(f"num_wrench_basis must be positive, got {self.num_wrench_basis}")
         if self.num_friction_cone_edges <= 0:

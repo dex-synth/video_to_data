@@ -68,7 +68,7 @@ class ManoSharpaReference:
 
     @property
     def sides(self) -> tuple[str, ...]:
-        return _SIDES
+        return tuple(self._wrist_pos_w)
 
     def wrist_pos_w(self, side: str) -> np.ndarray:
         return self._wrist_pos_w[side]
@@ -165,8 +165,11 @@ def load_mano_sharpa(
     *,
     object_assets: tuple[ObjectAssetSpec, ...] | None = None,
     sample_times_s: np.ndarray | None = None,
+    sides: tuple[str, ...] = _SIDES,
 ) -> ManoSharpaReference:
     """Load a ManoSharpa parquet and optionally resample it for control-rate playback.
+
+    ``sides`` selects the hands to read; a single-hand task has columns for that hand only.
 
     ``motion_speed`` scales source-time advancement per control step. Positions and joints use linear
     interpolation, quaternions use SLERP, and contact fields use nearest-neighbor sampling.
@@ -267,7 +270,7 @@ def load_mano_sharpa(
 
     wrist_pos, wrist_quat, finger, finger_names, c_pos, c_norm, c_pid = {}, {}, {}, {}, {}, {}, {}
     frame_pos, frame_names = {}, {}
-    for side in _SIDES:
+    for side in sides:
         wp_ = _arr(cells, f"robot_{side}_wrist_position")
         wq_ = _arr(cells, f"robot_{side}_wrist_wxyz")
         fj = _arr(cells, f"robot_{side}_finger_joints")

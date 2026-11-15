@@ -91,7 +91,10 @@ def test_build_scene_includes_support(h2r_setup):
     import warp as wp
 
     with wp.ScopedDevice("cuda:0"):
-        scene = h2r_setup().scene
-    assert scene.support_shape_count == 1
+        setup = h2r_setup()
+    scene = setup.scene
+    # The table, extra box supports and fixed meshes of the task all belong to the one support component.
+    environment = setup.reference.task.demo.environment
+    assert scene.support_shape_count >= sum(len(entry["collision_geoms"]) for entry in environment.values())
     assert scene.support is not None
     assert scene.support.shapes == scene.collision_layout.support

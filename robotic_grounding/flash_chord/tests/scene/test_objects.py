@@ -173,14 +173,19 @@ def test_object_import_preserves_common_robot_bodies_and_layout(h2r_binding):
         layout = H2rSharpaHands(h2r_binding).build(builder)
         body_prefix = tuple(builder.body_label)
         joint_prefix = tuple(builder.joint_label)
-        builder.add_mjcf(str(h2r_binding.parent / "assets/object.xml"), collapse_fixed_joints=False)
+        builder.add_mjcf(str(h2r_binding.parent / "assets/scene.xml"), collapse_fixed_joints=False)
+
+    from flash_chord.h2r.inputs import load_prepared
 
     assert tuple(builder.body_label[:len(body_prefix)]) == body_prefix
     assert tuple(builder.joint_label[:len(joint_prefix)]) == joint_prefix
-    for side in ("left", "right"):
+    for side in layout.sides:
         palm = layout.hand(side).palm_frame
         assert builder.body_label[palm.body_id].endswith(f"/{side}_hand_C_MC")
-    assert builder.body_count == len(body_prefix) + 2
+    # Every part of the task's objects, then the one support body of the static environment.
+    parts = load_prepared(h2r_binding)[1].demo.part_order
+    assert builder.body_count == len(body_prefix) + len(parts) + 1
+    assert builder.body_label[-1].endswith("/support")
 
 
 @pytest.mark.sequence_data

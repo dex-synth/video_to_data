@@ -5,16 +5,19 @@ from pathlib import Path
 
 from omegaconf import OmegaConf
 
-from .inputs import TRAINING_CLOCKS, load_binding
+from .inputs import BINDING, TRAINING_CLOCKS, load_prepared
 
 _UNSPECIFIED = object()
+# Hand lists of the native recipe; an H2R task keeps their order and selects its participating hands.
+HAND_LISTS = (("env.observation", "sides"), ("env.observation", "contact_sides"),
+              ("env.objective", "sides"), ("env.contact", "sides"))
 
 
 def validate_input(config, *, expected_binding=_UNSPECIFIED):
     """Keep sealed H2R admission separate from the restored native Sharpa entry."""
     cfg = config if OmegaConf.is_config(config) else OmegaConf.create(config)
     target = cfg.embodiment._target_
-    is_h2r = (Path(cfg.task.parquet).name == "h2r_binding.json"
+    is_h2r = (Path(cfg.task.parquet).name == BINDING
               or target.startswith("flash_chord.h2r.")
               or str(cfg.env.action._target_).startswith("flash_chord.h2r."))
     if is_h2r:
@@ -29,7 +32,7 @@ def validate_input(config, *, expected_binding=_UNSPECIFIED):
 
 
 def require_h2r_input(config, *, expected_binding=None):
-    """Validate the H2R branch without allowing fallback to native assets."""
+    """Validate the H2R branch without allowing fallback to native assets, and select the task's hands."""
     cfg = config if OmegaConf.is_config(config) else OmegaConf.create(config)
     runtimes = ("env", "replay") if "replay" in cfg else ("env",)
     targets = {
@@ -40,18 +43,21 @@ def require_h2r_input(config, *, expected_binding=None):
         if OmegaConf.select(cfg, key + "._target_") != expected:
             raise ValueError("H2R inputs require experiment=h2r_sharpa_flash_sac and the common robot/action")
     path = Path(cfg.task.parquet).expanduser().resolve()
-    if path.name != "h2r_binding.json":
-        raise ValueError("H2R requires a sealed h2r_binding.json, not a native Parquet reference")
+    if path.name != BINDING:
+        raise ValueError(f"H2R requires a sealed {BINDING}, not a native Parquet reference")
     if Path(cfg.embodiment.binding_path).expanduser().resolve() != path:
         raise ValueError("H2R robot and task must use the same sealed input")
     if (cfg.task.motion_speed != 1.0 or cfg.task.source_frame_playback
             or cfg.task.motion_start_frame != 0 or cfg.task.motion_end_frame != -1
             or any((cfg[name].sim.fps, cfg[name].sim.substeps) not in TRAINING_CLOCKS for name in runtimes)):
-        raise ValueError("H2R requires its complete 1x window and 20/5 training clock (historical: 20/6 or 30/4)")
+        raise ValueError("H2R requires its complete 1x window and the 20/5 training clock (or 20/6, 30/4)")
     if (not cfg.scene.support or cfg.scene.decompose_objects
             or (cfg.scene.object_scale_min, cfg.scene.object_scale_max) != (1.0, 1.0)):
         raise ValueError("H2R requires its complete support and unchanged object geometry")
-    binding = load_binding(path)
+    binding, _ = load_prepared(path)
     if expected_binding is not None and binding != expected_binding:
         raise ValueError("Checkpoint and runtime must use the same sealed H2R input")
+    for owner, key in HAND_LISTS:
+        node = OmegaConf.select(cfg, owner)  # the shared node itself where the recipe interpolates it
+        node[key] = [side for side in node[key] if side in binding["hand_sides"]]
     return binding

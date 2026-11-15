@@ -40,7 +40,12 @@ action:
   normalized_mapping: rational
 reset:
   skip_first_frame_settling: true
+# Native hand order; a task's participating hands are selected from these lists when its binding is loaded.
+objective:
+  sides: [right, left]
 env:
+  contact:
+    sides: [right, left]
   state_validity:
     _target_: flash_chord.envs.validity.StateValidityConfig
     max_body_displacement_m: 10.0

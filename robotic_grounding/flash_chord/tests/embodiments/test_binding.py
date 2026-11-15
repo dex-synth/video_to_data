@@ -40,7 +40,7 @@ def test_binding_exposes_readonly_dp_and_fingertip_trajectories(h2r_binding, mon
     binding = build_robot_reference_binding(builder, layout, joint_q, joint_q * 2.0, fps=20.0)
 
     assert binding.num_frames == 2
-    assert binding.num_joint_q == binding.num_joint_dof == 56
+    assert binding.num_joint_q == binding.num_joint_dof == layout.num_joint_q
     assert binding.fps == 20.0
     np.testing.assert_array_equal(binding.joint_q, joint_q)
     np.testing.assert_array_equal(binding.joint_target, joint_q * 2.0)
@@ -53,7 +53,7 @@ def test_binding_exposes_readonly_dp_and_fingertip_trajectories(h2r_binding, mon
         assert hand.wrist_quat_w.shape == (2, 4)
         assert hand.arm_joint_pos.shape == (2, 6)
         np.testing.assert_array_equal(hand.arm_joint_pos, joint_q[:, layout.hand(side).arm_q_ids])
-        assert hand.finger_joint_pos.shape == (2, 22)
+        assert hand.finger_joint_pos.shape == (2, len(layout.hand(side).finger_joint_names))
         assert hand.dp_pos_w.shape == hand.fingertip_pos_w.shape == (2, 5, 3)
         assert hand.dp_quat_w.shape == hand.fingertip_quat_w.shape == (2, 5, 4)
         assert hand.keypoint_pos_w("dp").shape == (2, 6, 3)
@@ -75,7 +75,7 @@ def test_binding_exposes_readonly_dp_and_fingertip_trajectories(h2r_binding, mon
         )
 
     with pytest.raises(ValueError, match="must be 'dp' or 'fingertip'"):
-        binding.hand("left").keypoint_pos_w("distal")
+        binding.hand(layout.sides[0]).keypoint_pos_w("distal")
     with pytest.raises(KeyError, match="no bound hand"):
         binding.hand("center")
 
@@ -88,40 +88,30 @@ def test_device_reference_preserves_named_binding_and_requested_side_order(h2r_b
     builder, layout = _common_robot(h2r_binding)
     joint_q = _trajectory(builder)
     binding = build_robot_reference_binding(builder, layout, joint_q, joint_q * 2.0, fps=20.0)
+    sides = tuple(reversed(layout.sides))  # the requested order, not the embodiment's
+    hands = [binding.hand(side) for side in sides]
     with wp.ScopedDevice("cuda:0"):
-        device_reference = DeviceRobotReference.build(binding, layout, sides=("right", "left"))
-        joint_target = device_reference.joint_target.numpy().reshape(2, 56)
-        arm_joint_pos = device_reference.arm_joint_pos.numpy().reshape(2, 12)
-        finger_joint_pos = device_reference.finger_joint_pos.numpy().reshape(2, 44)
-        wrist_pos = device_reference.wrist_pos_w.numpy().reshape(2, 2, 3)
-        wrist_quat = device_reference.wrist_quat_w.numpy().reshape(2, 2, 4)
+        device_reference = DeviceRobotReference.build(binding, layout, sides=sides)
+        joint_target = device_reference.joint_target.numpy().reshape(2, layout.num_joint_dof)
+        arm_joint_pos = device_reference.arm_joint_pos.numpy().reshape(2, -1)
+        finger_joint_pos = device_reference.finger_joint_pos.numpy().reshape(2, -1)
+        wrist_pos = device_reference.wrist_pos_w.numpy().reshape(2, len(sides), 3)
+        wrist_quat = device_reference.wrist_quat_w.numpy().reshape(2, len(sides), 4)
 
-    assert device_reference.sides == ("right", "left")
-    assert device_reference.arm_counts == (6, 6)
-    assert device_reference.finger_counts == (22, 22)
+    assert device_reference.sides == sides
+    assert device_reference.arm_counts == tuple(hand.arm_joint_pos.shape[1] for hand in hands)
+    assert device_reference.finger_counts == tuple(hand.finger_joint_pos.shape[1] for hand in hands)
     np.testing.assert_array_equal(joint_target, binding.joint_target)
-    np.testing.assert_array_equal(
-        arm_joint_pos,
-        np.concatenate(
-            (binding.hand("right").arm_joint_pos, binding.hand("left").arm_joint_pos),
-            axis=1,
-        ),
-    )
-    np.testing.assert_array_equal(
-        finger_joint_pos,
-        np.concatenate(
-            (binding.hand("right").finger_joint_pos, binding.hand("left").finger_joint_pos),
-            axis=1,
-        ),
-    )
-    np.testing.assert_array_equal(wrist_pos[:, 0], binding.hand("right").wrist_pos_w)
-    np.testing.assert_array_equal(wrist_quat[:, 0], binding.hand("right").wrist_quat_w[:, (1, 2, 3, 0)])
+    np.testing.assert_array_equal(arm_joint_pos, np.concatenate([hand.arm_joint_pos for hand in hands], axis=1))
+    np.testing.assert_array_equal(finger_joint_pos, np.concatenate([hand.finger_joint_pos for hand in hands], axis=1))
+    np.testing.assert_array_equal(wrist_pos[:, 0], hands[0].wrist_pos_w)
+    np.testing.assert_array_equal(wrist_quat[:, 0], hands[0].wrist_quat_w[:, (1, 2, 3, 0)])
 
     with pytest.raises(ValueError, match="device reference sides"):
-        DeviceRobotReference.build(binding, layout, sides=("left",))
-    bad_left = replace(binding.hand("left"), arm_joint_pos=np.empty((2, 7), dtype=np.float32))
-    bad_binding = replace(binding, hands=(bad_left, binding.hand("right")))
-    with pytest.raises(ValueError, match="left arm_joint_pos has width"):
+        DeviceRobotReference.build(binding, layout, sides=("center",))
+    bad_hand = replace(hands[0], arm_joint_pos=np.empty((2, 7), dtype=np.float32))
+    bad_binding = replace(binding, hands=(bad_hand, *hands[1:]))
+    with pytest.raises(ValueError, match=f"{sides[0]} arm_joint_pos has width"):
         DeviceRobotReference.build(bad_binding, layout)
 
 
@@ -131,7 +121,7 @@ def test_bound_reference_dataclasses_normalize_and_reject_invalid_ownership(h2r_
     builder, layout = _common_robot(h2r_binding)
     joint_q = _trajectory(builder)
     binding = build_robot_reference_binding(builder, layout, joint_q, joint_q, fps=20.0)
-    left = binding.hand("left")
+    left = binding.hand(layout.sides[0])
 
     scaled_quaternion = replace(left, wrist_quat_w=left.wrist_quat_w * 2.0)
     np.testing.assert_allclose(np.linalg.norm(scaled_quaternion.wrist_quat_w, axis=1), 1.0)
@@ -243,18 +233,18 @@ def test_named_joint_trajectory_preserves_q_and_clamps_only_controller_limit_noi
 
 
 @pytest.mark.parametrize(
-    ("joint_q_shape", "target_shape", "fps", "message"),
+    ("missing_coordinates", "target_frames", "fps", "message"),
     [
-        ((2, 55), (2, 56), 20.0, "joint_q must have shape"),
-        ((2, 56), (3, 56), 20.0, "joint_q has 2 frames"),
-        ((2, 56), (2, 56), 0.0, "fps must be positive"),
+        (1, 2, 20.0, "joint_q must have shape"),
+        (0, 3, 20.0, "joint_q has 2 frames"),
+        (0, 2, 0.0, "fps must be positive"),
     ],
 )
-def test_binding_rejects_invalid_trajectory_contract(h2r_binding, joint_q_shape, target_shape, fps, message):
+def test_binding_rejects_invalid_trajectory_contract(h2r_binding, missing_coordinates, target_frames, fps, message):
     from flash_chord.embodiments.binding import build_robot_reference_binding
 
     builder, layout = _common_robot(h2r_binding)
-    joint_q = np.zeros(joint_q_shape, dtype=np.float32)
-    joint_target = np.zeros(target_shape, dtype=np.float32)
+    joint_q = np.zeros((2, layout.num_joint_q - missing_coordinates), dtype=np.float32)
+    joint_target = np.zeros((target_frames, layout.num_joint_dof), dtype=np.float32)
     with pytest.raises(ValueError, match=message):
         build_robot_reference_binding(builder, layout, joint_q, joint_target, fps)
