@@ -5,10 +5,12 @@ default_stages: [pre-commit]
 default_install_hook_types: [pre-commit, pre-push]
 files: ^robotic_grounding/flash_chord/
 
-# Exclude binary/data asset files from text hooks.
+# Exclude binary/data asset files from text hooks, and the vendored h2r-bench loader from every hook:
+# its files must stay byte-identical to the bench export (`h2r-bench check-loader`).
 exclude: |
   (?x)^(
-    .*\.(stl|STL|mtl|MTL|gltf|GLTF|glb|GLB|bin|BIN|png|PNG|obj|OBJ)
+    .*\.(stl|STL|mtl|MTL|gltf|GLTF|glb|GLB|bin|BIN|png|PNG|obj|OBJ)|
+    robotic_grounding/flash_chord/src/flash_chord/h2r/h2r_io/.*
   )$
 
 repos:

@@ -47,6 +47,9 @@ packages = ["src/flash_chord"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+# Vendored h2r-bench loader: never edited or reformatted here (`h2r-bench check-loader` verifies it).
+extend-exclude = ["h2r_io"]
+force-exclude = true
 
 [tool.ruff.lint]
 [tool.ruff.lint.mccabe]
@@ -58,9 +61,11 @@ max-complexity = 10
 [tool.black]
 line-length = 120
 target-version = ["py311"]
+force-exclude = "/h2r_io/"
 
 [tool.mypy]
 python_version = "3.11"
+exclude = ["/h2r_io/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
