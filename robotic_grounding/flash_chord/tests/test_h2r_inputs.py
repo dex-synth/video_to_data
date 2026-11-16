@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """One task directory is the only input: structure, admission and binding checks on small sealed tasks."""
 
+import json
+
 import mujoco
 import numpy as np
 import pytest
@@ -10,8 +12,8 @@ from flash_chord.configuration import compose_config
 from flash_chord.h2r.assets import SUPPORT_BODY, scene_xml
 from flash_chord.h2r.configuration import require_h2r_input
 from flash_chord.h2r.h2r_io import export_task
-from flash_chord.h2r.inputs import BINDING, FORMAT, load_input, load_prepared, seal_prepared, write_json
-from flash_chord.h2r.prepare import ik_settings
+from flash_chord.h2r.inputs import BINDING, FORMAT, TIMING, load_input, load_prepared, seal_prepared, write_json
+from flash_chord.h2r.prepare import ik_settings, timed_stage
 from flash_chord.h2r.reference import JOINT_DRIVE, object_assets
 
 
@@ -119,6 +121,29 @@ def test_changed_method_file_is_rejected(tmp_path):
         stream.write("<!-- changed -->")
     with pytest.raises(ValueError, match="changed file"):
         load_prepared(binding_path)
+
+
+def test_stage_timing_is_recorded_but_not_sealed(tmp_path):
+    binding_path = prepared(tmp_path, "single_rigid")
+    output, sealed = binding_path.parent, binding_path.read_text()
+    with timed_stage(output, "seal"):
+        pass
+    with pytest.raises(RuntimeError), timed_stage(output, "ik"):
+        raise RuntimeError("IK failed")
+    records = [json.loads(line) for line in (output / TIMING).read_text().splitlines()]
+    assert [(r["stage"], r["status"]) for r in records] == [("seal", "completed"), ("ik", "failed")]
+    assert all(r["format"] == "flashchord-preparation-timing-v1" and r["wall_s"] >= 0 for r in records)
+    # A diagnostic beside the method files: resealing ignores it, so it changes no prepared identity.
+    seal_prepared(output, {})
+    assert binding_path.read_text() == sealed and set(load_prepared(binding_path)[0]["files"]) == {"assets/scene.xml"}
+    # A preparation refused because its output exists leaves that directory's record alone.
+    before = (output / TIMING).read_text()
+    with pytest.raises(FileExistsError), timed_stage(output, "prepare", creates_output=True):
+        output.mkdir()
+    assert (output / TIMING).read_text() == before
+    with timed_stage(tmp_path / "never-created", "features"):
+        pass
+    assert not (tmp_path / "never-created").exists()
 
 
 @pytest.mark.parametrize("structure,hands", [("hinged_box", ["right", "left"]), ("hinged_tool_right_hand", ["right"])])

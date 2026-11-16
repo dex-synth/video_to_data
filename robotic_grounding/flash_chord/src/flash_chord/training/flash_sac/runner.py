@@ -562,7 +562,10 @@ def _run_training(
         objective_term_count=len(env.objective_term_names),
         device=jax_device,
     )
-    print(f"compiled FlashSAC JAX executables on {jax_device} in {time.perf_counter() - compile_start:.2f}s")
+    compile_seconds = time.perf_counter() - compile_start
+    print(f"compiled FlashSAC JAX executables on {jax_device} in {compile_seconds:.2f}s")
+    if isinstance(progress, ConsoleTrainingProgress):
+        progress.compiled(compile_seconds)
     action, exploration, key = executables.initial_action(
         learner.actor.params,
         learner.actor.batch_stats,

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+import json
 import os
 import time
 from pathlib import Path
@@ -38,10 +40,21 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ["TZ"] = "PST8PDT,M3.2.0,M11.1.0"
 time.tzset()
 
+TIMING = "training_timing.jsonl"
+TIMING_FORMAT = "flashchord-training-timing-v1"
+
+
+def record_timing(output_dir: Path, record: dict[str, object]) -> None:
+    """Append this invocation's wall-clock phases beside its checkpoints; a resumed run adds a line."""
+    record = {"format": TIMING_FORMAT, "finished_at": datetime.now().astimezone().isoformat(), **record}
+    with (output_dir / TIMING).open("a") as stream:
+        stream.write(json.dumps(record, allow_nan=False) + "\n")
+
 
 @hydra.main(version_base="1.3", config_path="../src/flash_chord/configs", config_name="train_flash_sac")
 def main(cfg: DictConfig) -> None:
     """Compose one FlashSAC experiment and run its compiled Warp/JAX training loop."""
+    started = time.perf_counter()
     binding = validate_input(cfg)
     if cfg.training.checkpoint_path is not None:
         saved = checkpoint_config(read_checkpoint_metadata(resolve_path(cfg.training.checkpoint_path)))
@@ -114,16 +127,33 @@ def main(cfg: DictConfig) -> None:
                 mode=cfg.logging.mode,
                 dir=str(output_dir),
             )
-        learner = run_training(
-            jax_env,
-            training,
-            logger=logger,
-            checkpoint_dir=output_dir,
-            log_interval=cfg.logging.log_interval,
-            voc_scale_override=cfg.voc_scale_override,
-            checkpoint_metadata=checkpoint_metadata,
-            progress=ConsoleTrainingProgress(training.total_environment_steps, output_dir),
-        )
+        progress = ConsoleTrainingProgress(training.total_environment_steps, output_dir)
+        # Setup: configuration, scene and environment construction with graph capture. Training: learner
+        # initialization or restore, compilation and the interaction/update loop with checkpoint writes.
+        setup_seconds = time.perf_counter() - started
+        training_started, status, learner = time.perf_counter(), "failed", None
+        try:
+            learner = run_training(
+                jax_env,
+                training,
+                logger=logger,
+                checkpoint_dir=output_dir,
+                log_interval=cfg.logging.log_interval,
+                voc_scale_override=cfg.voc_scale_override,
+                checkpoint_metadata=checkpoint_metadata,
+                progress=progress,
+            )
+            status = "completed"
+        finally:
+            timing = progress.timing()
+            record_timing(output_dir, {
+                "status": status, "setup_s": setup_seconds, "training_s": time.perf_counter() - training_started,
+                "compile_s": timing["compile_s"], "loop_s": timing["loop_s"],
+                "environment_steps_start": timing["environment_steps_start"],
+                "environment_steps_end": (int(jax.device_get(learner.environment_steps)) if learner is not None
+                                          else timing["last_reported_environment_steps"]),
+                "world_count": training.world_count, "device": training.device, "resume": training.resume,
+            })
     print(f"completed {int(jax.device_get(learner.environment_steps))} environment steps; checkpoints: {output_dir}")
 
 

@@ -55,3 +55,14 @@ def test_console_progress_reports_invalid_episode_ratio_without_logger(capsys, t
     lines = capsys.readouterr().out.splitlines()
     assert lines[1].endswith("invalid episodes: 0/0 (n/a)")
     assert lines[2].endswith("invalid episodes: 3/1,200 (0.25%)")
+
+
+def test_console_progress_separates_compilation_from_the_loop(monkeypatch, tmp_path):
+    times = iter((100.0, 130.0))
+    monkeypatch.setattr("flash_chord.training.progress.time.perf_counter", lambda: next(times))
+    progress = ConsoleTrainingProgress(1_000, tmp_path)
+    assert progress.timing()["elapsed_s"] is None  # not started: nothing measured
+    progress.start(200)
+    progress.compiled(12.5)
+    assert progress.timing() == {"environment_steps_start": 200, "last_reported_environment_steps": 200,
+                                 "elapsed_s": 30.0, "compile_s": 12.5, "loop_s": 17.5}

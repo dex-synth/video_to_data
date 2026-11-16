@@ -6,13 +6,15 @@ from pathlib import Path
 from .h2r_io import load_task
 from .h2r_io.files import file_hashes, read_json, sha256, verify_files, write_json
 
-__all__ = ["BINDING", "DIGITS", "FORMAT", "TRAINING_CLOCKS", "frame_names", "load_input", "load_prepared",
-           "read_json", "seal_prepared", "sha256", "write_json"]
+__all__ = ["BINDING", "DIGITS", "FORMAT", "TIMING", "TRAINING_CLOCKS", "frame_names", "load_input",
+           "load_prepared", "read_json", "seal_prepared", "sha256", "write_json"]
 
 # v1 bound the former human/robot bundles. v3: the training scene keeps MuJoCo's default hull limit for
 # meshes without maxhullvert, as the task model does; v2 checkpoints trained with Newton's limit of 64.
 FORMAT = "flashchord-h2r-v3"
 BINDING = "h2r_binding.json"
+# Wall-clock record of the preparation stages; a diagnostic outside the sealed method files.
+TIMING = "preparation_timing.jsonl"
 ROBOT = "sharpa_wave"  # the native IK, link geometry and contact links exist for this hand only
 DIGITS = ("thumb", "index", "middle", "ring", "pinky")
 WRIST_LIMIT_RAD = 6.2  # range of the continuous wrist decoder (wrist.py, action.py)
@@ -59,7 +61,7 @@ def seal_prepared(output, method):
     """Write the binding over a finished preparation; the task copy is sealed by its own task_id."""
     output = Path(output).resolve()
     task = load_input(output / "task")
-    files = {name: digest for name, digest in file_hashes(output, exclude=(BINDING,)).items()
+    files = {name: digest for name, digest in file_hashes(output, exclude=(BINDING, TIMING)).items()
              if not name.startswith("task/")}
     write_json(output / BINDING, {
         "format": FORMAT, "task_id": task.task_id, "demo_id": task.demo.demo_id, "robot_id": task.robot.robot_id,

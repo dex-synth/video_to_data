@@ -34,6 +34,7 @@ class ConsoleTrainingProgress:
         self._last_environment_steps = -1
         self._next_percent = 0
         self._start_time: float | None = None
+        self.compile_seconds: float | None = None
 
     def start(self, completed_environment_steps: int) -> None:
         """Print the initial state and initialize throughput/ETA timing."""
@@ -90,6 +91,22 @@ class ConsoleTrainingProgress:
         )
         self._last_environment_steps = completed_environment_steps
         self._next_percent = min(100, int(percent) + 1)
+
+    def compiled(self, seconds: float) -> None:
+        """Record the compilation of the training executables, which happens after start."""
+        self.compile_seconds = float(seconds)
+
+    def timing(self) -> dict[str, float | int | None]:
+        """Wall time since start, its compilation share and the last displayed step count; None before start."""
+        if self._start_time is None:
+            return {"environment_steps_start": None, "last_reported_environment_steps": None,
+                    "elapsed_s": None, "compile_s": None, "loop_s": None}
+        elapsed = time.perf_counter() - self._start_time
+        compile_seconds = self.compile_seconds
+        return {"environment_steps_start": self._start_environment_steps,
+                "last_reported_environment_steps": self._last_environment_steps,
+                "elapsed_s": elapsed, "compile_s": compile_seconds,
+                "loop_s": elapsed - compile_seconds if compile_seconds is not None else None}
 
     def _percent(self, completed_environment_steps: int) -> float:
         return 100.0 * completed_environment_steps / self.total_environment_steps

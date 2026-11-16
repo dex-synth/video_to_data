@@ -2,15 +2,19 @@
 """Prepare native Sharpa references from one sealed H2R task in isolated environments."""
 
 import argparse
+from contextlib import contextmanager
+from datetime import datetime
+import json
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .h2r_io import export_task
-from .inputs import DIGITS, frame_names, load_input, read_json, seal_prepared, sha256, write_json
+from .inputs import DIGITS, TIMING, frame_names, load_input, read_json, seal_prepared, sha256, write_json
 
 # The method's own preparation settings; the sealed binding records them.
 METHOD = {
@@ -31,6 +35,27 @@ IK_SETTINGS = {
 # Bench's MANO16 + five tips -> the native wrist/finger-chain order.
 NATIVE_JOINT_ORDER = [0, 13, 14, 15, 16, 1, 2, 3, 17, 4, 5, 6, 18, 10, 11, 12, 19, 7, 8, 9, 20]
 NATIVE_TIP_SLOTS = [4, 8, 12, 16, 20]
+
+
+@contextmanager
+def timed_stage(output, stage, *, creates_output=False):
+    """Append the stage's wall time to the preparation's timing record, also when it fails.
+
+    Nothing is written without an output directory (a rejected input), nor into one that a stage
+    creating its output found already there: that directory belongs to another preparation.
+    """
+    output = Path(output)
+    foreign = creates_output and output.exists()
+    started_at, begin, status = datetime.now().astimezone().isoformat(), time.perf_counter(), "failed"
+    try:
+        yield
+        status = "completed"
+    finally:
+        if output.is_dir() and not foreign:
+            record = {"format": "flashchord-preparation-timing-v1", "stage": stage, "status": status,
+                      "started_at": started_at, "wall_s": time.perf_counter() - begin}
+            with (output / TIMING).open("a") as stream:
+                stream.write(json.dumps(record, allow_nan=False) + "\n")
 
 
 def ik_settings(dataset):
@@ -346,13 +371,16 @@ def prepare(args):
     output.mkdir(parents=True, exist_ok=False)
     (output / "checks").mkdir()
     # The preparation keeps its own sealed copy of the task: checkpoints refer to this directory.
-    export_task(task, output / "task")
-    prepare_assets(load_input(output / "task"), output / "assets")
+    with timed_stage(output, "assets"):
+        export_task(task, output / "task")
+        prepare_assets(load_input(output / "task"), output / "assets")
+    # Each stage process appends its own timing, so these include only the work, not interpreter startup.
     stage = ["-m", "flash_chord.h2r.prepare"]
     subprocess.run([args.loader_python, *stage, "features", "--output", str(output),
                     "--mano-root", args.mano_root, "--device", args.device], check=True)
     subprocess.run([args.ik_python, *stage, "ik", "--output", str(output)], check=True)
-    seal(output)
+    with timed_stage(output, "seal"):
+        seal(output)
 
 
 def seal(output):
@@ -382,13 +410,17 @@ def main():
         for name in ("task", "mano_root", "loader_python", "ik_python"):
             if not getattr(args, name):
                 parser.error(f"--{name.replace('_', '-')} is required for prepare")
-        prepare(args)
+        with timed_stage(args.output, "prepare", creates_output=True):
+            prepare(args)
     elif args.stage == "features":
-        features(args.output, args.mano_root, args.device)
+        with timed_stage(args.output, "features"):
+            features(args.output, args.mano_root, args.device)
     elif args.stage == "ik":
-        ik(args.output)
+        with timed_stage(args.output, "ik"):
+            ik(args.output)
     else:
-        seal(args.output)
+        with timed_stage(args.output, "seal"):
+            seal(args.output)
 
 
 if __name__ == "__main__":

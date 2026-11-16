@@ -85,7 +85,7 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 
 处理整个 suite 时按分发顺序逐个 task 准备，例如 `h2r-bench list-suite "$SUITE" | while IFS=$'\t' read -r CASE TASK; do ...; done`。
 
-准备入口拒绝覆盖已有输出目录；失败时保留中间产物供诊断。`features`、`ik`、`seal` 子阶段可以通过 `--output` 显式重跑，`features` 还需要 `--mano-root`。只有全部阶段成功后生成的 `h2r_binding.json` 才是训练输入。不要把 `processed.parquet` 单独传给原生配方。
+准备入口拒绝覆盖已有输出目录；失败时保留中间产物供诊断。`features`、`ik`、`seal` 子阶段可以通过 `--output` 显式重跑，`features` 还需要 `--mano-root`。每个阶段结束时（含失败）向 `preparation_timing.jsonl` 追加一行墙钟记录（`assets`、`features`、`ik`、`seal` 及整个 `prepare`）；重跑的子阶段同样追加。只有全部阶段成功后生成的 `h2r_binding.json` 才是训练输入。不要把 `processed.parquet` 单独传给原生配方。
 
 ```bash
 # 使用完整 H2R 配方；TRAIN_OUTPUT 指向新的外部输出目录。
@@ -108,6 +108,8 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 ```
 
 `task.parquet` 沿用原生字段名，值必须是 `h2r_binding.json`。默认（正式）配方为 4096 个 world、250,003,456 个 environment step。只为检查链路的短训练须显式覆盖预算，例如 `scene.world_count=512 training.total_environment_steps=2048000 training.replay.capacity=1048576 training.replay.minimum_size=102400 training.checkpoint.save_interval_environment_steps=2048000`；这些不是默认值，其 checkpoint 不能当作正式结果。
+
+每次训练结束时（含失败）在 `output_dir` 的 `training_timing.jsonl` 追加一行：`setup_s`（配置、场景与环境构建，含 graph capture）、`training_s`（learner 初始化或恢复、编译、交互／更新循环与 checkpoint 写入），其中 `compile_s` 为编译、`loop_s` 为编译之后到结束；另记起止 environment step、world 数、设备与是否续训。续训追加新行。Python 导入与 Hydra 启动不在其中；共同的外部计时由 bench 的 `time-stage` 记录。
 
 原生评估与 viewer 使用 checkpoint 中的配置重建方法环境，不代表 h2r 共同成绩。更改当前 YAML 不会更改旧 checkpoint 中的配置。
 
@@ -154,7 +156,8 @@ H2R 配方启用 `reset.skip_first_frame_settling=true`：先按原生规则采�
 | `processed.parquet` | 原生手位姿、手指、robot frames 和对象参考（只含参与手的列） |
 | `robot_reference.npz` | 按机器人关节名称排列的参考坐标 |
 | `checks/mano.json`、`checks/ik.json` | 人手几何核对、实际采样数、FK 和逐帧 IK 误差／迭代数 |
-| `h2r_binding.json` | 格式 `flashchord-h2r-v2`：`task_id`、`demo_id`、`robot_id`、数据集、参与手、时长、方法设置及方法产物 hash |
+| `preparation_timing.jsonl` | 各准备阶段的墙钟与状态；诊断记录，不进入 binding 的 `files`，不影响 prepared 身份 |
+| `h2r_binding.json` | 格式 `flashchord-h2r-v3`：`task_id`、`demo_id`、`robot_id`、数据集、参与手、时长、方法设置及方法产物 hash |
 
 `task/` 由自身的 `task_id` 封存，每次加载时经 `h2r_io` 校验 task、demo、robot 的全部文件；binding 的 `files` 覆盖其余方法产物。所有运行资源均在准备目录内，XML 和 Parquet 使用相对资源路径；移动整个目录后可以重新加载。修改任何文件都会被拒绝。
 
