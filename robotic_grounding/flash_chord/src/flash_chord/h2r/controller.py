@@ -150,8 +150,9 @@ class Controller:
 
     def start(self):
         """Every episode starts at the reference's first frame; the period is the trained control period."""
+        # `checkpoint` and `sha256` are the field names the bench reads as the checkpoint identity.
         information = {"name": "flash_chord.h2r.evaluation", "checkpoint": str(self.checkpoint),
-                       "checkpoint_sha256": sha256(self.checkpoint)}
+                       "sha256": sha256(self.checkpoint)}
         return client.start_request(
             self.hello, method=METHOD, controller=information, control_dt_s=self.control_dt,
             initial_robot={identity: self.initial for identity in self.ids},

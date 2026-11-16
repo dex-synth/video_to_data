@@ -223,7 +223,7 @@ Bench 用同一个 task 启动 evaluator（`h2r-bench evaluate-server task=...`�
 客户端使用 `h2r_io.client` 收发 `h2r-evaluation-v2` 消息：
 
 - 核对 `hello.protocol`，并以 `hello.task_id` 等于 binding 的 `task_id` 确认 evaluator 运行的就是准备时的 task；不再逐项比较物体、观测等内容。
-- `start` 由 `start_request` 组装：`binding = {demo_id, robot_id, method="flashchord", controller}`，`controller` 记录 checkpoint 路径与 sha256；`requirements` 声明方法读取的全部 body、`contacts=true` 和 `control_dt_s`（checkpoint 的训练控制周期，默认 1/20 s）。
+- `start` 由 `start_request` 组装：`binding = {demo_id, robot_id, method="flashchord", controller}`，`controller` 以 bench 读取的字段名 `checkpoint`、`sha256` 记录 checkpoint 路径与 hash；`requirements` 声明方法读取的全部 body、`contacts=true` 和 `control_dt_s`（checkpoint 的训练控制周期，默认 1/20 s）。
 - 每周期的物理 tick 数由 `control_ticks(hello, control_dt_s)` 得出；周期不是 `hello["dt_s"]` 的整数倍时在本地报错。产物中只保存以秒为单位的周期。
 - 每个 episode 提交一次首帧具名机器人初态；终态不再产生动作。
 

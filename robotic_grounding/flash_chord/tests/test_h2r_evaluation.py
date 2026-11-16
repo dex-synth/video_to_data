@@ -1,5 +1,6 @@
 """H2R deployment parity against method environment states and measured contacts."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -163,4 +164,7 @@ def test_deployment_physics_clock_is_independent_of_training(controller, physics
     assert start["requirements"] == {"bodies": list(deployed.observed_bodies.values()), "contacts": True,
                                      "control_dt_s": controller.control_dt}
     assert start["binding"]["method"] == "flashchord" and start["task_id"] == controller.binding["task_id"]
+    checkpoint = Path(os.environ["FLASHCHORD_H2R_CHECKPOINT"])
+    assert start["binding"]["controller"] == {"name": "flash_chord.h2r.evaluation", "checkpoint": str(checkpoint),
+                                              "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest()}
     assert deployed.saved_config["env"]["sim"] == controller.saved_config["env"]["sim"]
