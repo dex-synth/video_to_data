@@ -138,6 +138,10 @@ def features(output, mano_root, device):
         find_object_contact_positions,
     )
 
+    if torch.device(device).type == "cpu":
+        # Each frame is a few small tensor ops. Torch's default of one thread per core spends far
+        # more time scheduling than computing, and parallel preparations then oversubscribe the CPU.
+        torch.set_num_threads(1)
     output = Path(output)
     demo = load_input(output / "task").demo
     convention = demo.reference["mano"]

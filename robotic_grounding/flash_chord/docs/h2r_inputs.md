@@ -87,6 +87,8 @@ IK_PY=/opt/h2r/v2d-preprocess/bin/python
 
 准备入口拒绝覆盖已有输出目录；失败时保留中间产物供诊断。`features`、`ik`、`seal` 子阶段可以通过 `--output` 显式重跑，`features` 还需要 `--mano-root`。每个阶段结束时（含失败）向 `preparation_timing.jsonl` 追加一行墙钟记录（`assets`、`features`、`ik`、`seal` 及整个 `prepare`）；重跑的子阶段同样追加。只有全部阶段成功后生成的 `h2r_binding.json` 才是训练输入。不要把 `processed.parquet` 单独传给原生配方。
 
+`features` 在 CPU 上固定使用单个 torch 线程：逐帧计算只有少量小张量运算，torch 默认按核数开线程时调度开销远大于计算，多个准备并行时还会争抢 CPU。单线程与默认线程的 `features.npz` 逐字节相同（TACO `seq_20231002_063` 上核对），该阶段由 129 s 降为约 10 s；多个 task 可各自单进程并行准备。上游 loader 默认在 `cuda:0` 计算这些特征，这里的 loader 环境只有 CPU 版 torch。
+
 ```bash
 # 使用完整 H2R 配方；TRAIN_OUTPUT 指向新的外部输出目录。
 "$FLASH_PY" scripts/train_flash_sac.py \
