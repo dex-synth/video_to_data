@@ -45,6 +45,19 @@ from .scene import build_h2r_scene
 METHOD = "flashchord"  # the method identity reported in the evaluation binding
 
 
+def controller_information(checkpoint):
+    """The deployed artifact as reported to the benchmark, by the evaluation client and by the method rollout."""
+    # `checkpoint` and `sha256` are the field names the bench reads as the checkpoint identity.
+    checkpoint = Path(checkpoint).resolve()
+    return {"name": "flash_chord.h2r.evaluation", "checkpoint": str(checkpoint), "sha256": sha256(checkpoint)}
+
+
+def initial_robot(prepared):
+    """The robot pose proposed for the start of every episode: the first frame of the prepared IK, by joint name."""
+    with np.load(Path(prepared) / "robot_reference.npz", allow_pickle=False) as data:
+        return dict(zip(data["joint_names"].tolist(), data["joint_q"][0].tolist()))
+
+
 def finite_array(value, shape, name):
     value = np.asarray(value, dtype=np.float32)
     if value.shape != shape or not np.isfinite(value).all():
@@ -143,18 +156,15 @@ class Controller:
             previous = self.shape_by_body.setdefault(name, shape)
             if roles[shape] != roles[previous]:
                 raise ValueError(f"Body-level contacts cannot represent different shape roles: {name}")
-        with np.load(binding_path.parent / "robot_reference.npz", allow_pickle=False) as data:
-            self.initial = dict(zip(data["joint_names"].tolist(), data["joint_q"][0].tolist()))
+        self.initial = initial_robot(binding_path.parent)
         self.last_tick = {identity: -self.control_ticks for identity in self.ids}
         self.finished = set()
 
     def start(self):
         """Every episode starts at the reference's first frame; the period is the trained control period."""
-        # `checkpoint` and `sha256` are the field names the bench reads as the checkpoint identity.
-        information = {"name": "flash_chord.h2r.evaluation", "checkpoint": str(self.checkpoint),
-                       "sha256": sha256(self.checkpoint)}
         return client.start_request(
-            self.hello, method=METHOD, controller=information, control_dt_s=self.control_dt,
+            self.hello, method=METHOD, controller=controller_information(self.checkpoint),
+            control_dt_s=self.control_dt,
             initial_robot={identity: self.initial for identity in self.ids},
             bodies=list(self.observed_bodies.values()), contacts=True)
 

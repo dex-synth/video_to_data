@@ -240,3 +240,27 @@ Bench 用同一个 task 启动 evaluator（`h2r-bench evaluate-server task=...`�
 策略与原生观测／动作 buffer 保留 CUDA 运算和 checkpoint 的计算 dtype。入口在 JAX 初始化前设置 `--xla_gpu_deterministic_ops=true --xla_gpu_autotune_level=0`，每次 actor 推理固定为一个 episode，避免独立进程 autotuning 或评估批量改变浮点计算路径；冲突的 XLA 设置明确拒绝。`--device` 默认 `cuda:0`，物理 evaluator 的 MuJoCo CPU 与方法的 CUDA 推理是独立选择。EMA、原生残差旋转组合、历史及连续腕分支均保留；不附加目标机械限位裁剪。当前入口要求零 delay、无 arm integral、无额外方法速度限制的 H2R 配方。
 
 控制器输出目录保存 start 中上报的 binding、控制周期、配置、XLA flags、hello、观测／动作／目标及耗时；成绩与 physical rollout 由 bench 记录。此入口不保证任务成功。
+
+## 方法内 rollout 的导出
+
+bench 在独立评估之外，还报告方法在自己仿真里的表现（条件 `method-sim`，自报）。本方法的方法内 rollout 是同一个 checkpoint 在训练环境中的无辅助完整轨迹：
+
+```bash
+"$FLASH_PY" -m flash_chord.h2r.method_rollout \
+  --checkpoint /path/to/policy.safetensors --prepared "$PREPARED" --output /path/to/new-method-rollout
+```
+
+[h2r/method_rollout.py](../src/flash_chord/h2r/method_rollout.py) 按 checkpoint 自带的配置重建训练环境（Newton／MuJoCo-Warp，默认 20 Hz 控制 × 5 子步即 100 Hz 物理），套用原生评估的无辅助组合（`apply_evaluation_composition`），用原生记录器 `record_object_pose_rollout` 从参考第 0 帧运行整条参考，并把每个物理步之后的 `joint_q` 写成 `h2r-method-rollout-v1` 包（`h2r_io.method_rollout`）。GPU 物理不保证逐位可重复，因此从同一初态并行 10 个 world，每个 world 是一条轨迹。bench 用 `h2r-bench import-method-rollout` 导入并计分。
+
+| 项目 | 做法 |
+| --- | --- |
+| 部署产物 | `binding.method` 与 `binding.controller` 由评估客户端的同一函数生成（`controller.py` 的 `METHOD`、`controller_information`），checkpoint hash 相同；动作取 actor 均值，XLA 设置与客户端相同 |
+| 初态 | 显式 reset 到第 0 帧（`env.reset(frame_id=0)`）：完整参考手指，不随机打开，物体取参考首帧，全部速度为零，没有准备期。导出时核对速度为零、机器人姿态等于客户端在 `start` 中提出的 `robot_reference.npz` 第 0 帧（仿真为单精度） |
+| 辅助与扰动 | VOC 比例与力／力矩上限均为 0（物体关节的辅助驱动随之失效），不自动 reset；训练环境没有外扰和随机化，带动作 delay 的 checkpoint 被拒绝。导出结束时再次核对实际施加的 VOC 比例为 0 |
+| 提前结束 | 跟踪失败不结束 world，事后按阈值判定。训练环境自己的无效状态终止（状态非有限、越界或超速，关节超出限位裕度）保留：该 world 的参考时钟自此停住，轨迹在该控制步结束并记录 `ended_at_s` |
+| 记录 | 环境的 solver 被包一层 `RecordingSolver`，在 `solver.step` 之后把 `joint_q` 拷入设备缓冲；拷贝与训练时一样捕获进同一个 CUDA graph，环境的步进代码不变。首个状态是 reset 后的初态；每个控制步处的状态须与原生记录器读回的物体位姿一致，否则导出报错 |
+| 方法判定 | 原生 `chord_sr` 的逐 world 结果（`score_reference_tracking`）：到达参考末尾、状态有限，且每个控制步的最大跟踪误差不超过训练终止阈值（默认腕位置 0.15 m、物体位置 0.1 m、物体姿态 0.5 rad）。`metrics` 给出各项误差的最大值 |
+
+原生判定比 bench 的物体指标严格：它包含腕部阈值，误差按状态自身的参考时刻计算。例如 ARCTIC `s01-box_use_01` 的正式 checkpoint 在 10 个 world 中物体全程跟踪（bench 计分 10／10），原生判定却全部为失败，因为第 28 秒附近腕位置误差达到 0.157 m。
+
+`tests/test_h2r_method_rollout.py` 用真实 checkpoint 与准备产物运行导出（2 个 world），核对上报身份、运行条件、物理步时间轴和首个状态；需要 `FLASHCHORD_H2R_CHECKPOINT`、`FLASHCHORD_H2R_BINDING` 和 GPU，未设置时 skip。
