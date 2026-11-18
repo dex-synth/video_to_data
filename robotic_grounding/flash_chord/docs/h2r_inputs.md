@@ -41,7 +41,7 @@ task 由 [h2r_io/](../src/flash_chord/h2r/h2r_io/) 读取。该目录是 h2r_ben
 
 ## 数据集配方
 
-方法只在 IK 上按数据集选择自己的超参数，取自上游各数据集的 Sharpa 重定向入口（`robotic_grounding/scripts/retarget/<dataset>_to_sharpa.py`）。四个数据集逐一列出；未列出的数据集直接报错，没有默认配方。
+方法只在 IK 上按数据集选择自己的超参数，取自上游各数据集的 Sharpa 重定向入口（`robotic_grounding/scripts/retarget/<dataset>_to_sharpa.py`）。支持的数据集逐一列出；未列出的数据集直接报错，没有默认配方。
 
 | 数据集 | `mano_to_robot_scale` | 腕初值偏置 `wrist_offset_xyzw` | 上游入口 |
 | --- | --- | --- | --- |
@@ -49,6 +49,7 @@ task 由 [h2r_io/](../src/flash_chord/h2r/h2r_io/) 读取。该目录是 h2r_ben
 | OakInk2 | 1.2 | 无 | `oakink2_to_sharpa.py` |
 | HOT3D | 1.2 | 无 | `hot3d_to_sharpa.py` |
 | TACO | 1.2 | 无 | `taco_to_sharpa.py` |
+| DexterHand | 1.2 | 无 | 无专用入口；取上游各 Sharpa 入口的通用默认值（九个入口中七个为 1.2，只有 ARCTIC 带腕初值偏置） |
 
 `mano_to_robot_scale` 缩放相对腕部的人手目标，不缩放物体或计分轨迹；腕偏置只用于第一帧 IK 的初值。实际设置写入 `checks/ik.json` 与 binding；seal 拒绝与所选配方不一致的 IK 结果。几何检查会恢复 solver 初态及 FK 缓存，避免影响第一帧 IK。
 

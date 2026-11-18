@@ -31,6 +31,9 @@ IK_SETTINGS = {
     "oakink2": {"mano_to_robot_scale": 1.2, "wrist_offset_xyzw": None},  # oakink2_to_sharpa.py
     "hot3d": {"mano_to_robot_scale": 1.2, "wrist_offset_xyzw": None},  # hot3d_to_sharpa.py
     "taco": {"mano_to_robot_scale": 1.2, "wrist_offset_xyzw": None},  # taco_to_sharpa.py
+    # No upstream entry. The value the upstream Sharpa entries share: seven of the nine (H2O, TACO, GRAB, HOT3D,
+    # OakInk2, EgoRecon, DexYCB) scale by 1.2, and only ARCTIC seeds the wrist with an offset.
+    "dexterhand": {"mano_to_robot_scale": 1.2, "wrist_offset_xyzw": None},
 }
 # Bench's MANO16 + five tips -> the native wrist/finger-chain order.
 NATIVE_JOINT_ORDER = [0, 13, 14, 15, 16, 1, 2, 3, 17, 4, 5, 6, 18, 10, 11, 12, 19, 7, 8, 9, 20]

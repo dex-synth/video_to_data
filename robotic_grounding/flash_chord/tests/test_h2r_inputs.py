@@ -88,8 +88,10 @@ def test_native_limits_fail_explicitly(tmp_path):
 
 
 def test_dataset_recipes_are_listed_without_a_default():
-    assert {name: ik_settings(name)["mano_to_robot_scale"] for name in ("arctic", "oakink2", "hot3d", "taco")} == {
-        "arctic": 1.0, "oakink2": 1.2, "hot3d": 1.2, "taco": 1.2}
+    names = ("arctic", "oakink2", "hot3d", "taco", "dexterhand")
+    assert {name: ik_settings(name)["mano_to_robot_scale"] for name in names} == {
+        "arctic": 1.0, "oakink2": 1.2, "hot3d": 1.2, "taco": 1.2, "dexterhand": 1.2}
+    assert ik_settings("dexterhand")["wrist_offset_xyzw"] is None
     assert ik_settings("arctic")["wrist_offset_xyzw"] and ik_settings("taco")["wrist_offset_xyzw"] is None
     with pytest.raises(ValueError, match="No Sharpa IK recipe for dataset 'grab'"):
         ik_settings("grab")

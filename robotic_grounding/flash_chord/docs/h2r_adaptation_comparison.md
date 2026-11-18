@@ -28,7 +28,7 @@
 | ARCTIC IK 参数 | `mano_to_robot_scale=1.0`；腕初始偏置 `xyzw=[-0.5,0.5,0.5,0.5]` | 一致 |
 | OakInk2、HOT3D、TACO IK 参数 | `mano_to_robot_scale=1.2`；腕初始偏置 `None` | 一致 |
 
-IK 的 `mano_to_robot_scale` 缩放相对腕部的人手目标，不缩放共同物体或计分轨迹。四个数据集各自对应上游的 Sharpa 重定向入口，未列出的数据集没有默认配方；支持的结构与原生限制见 [H2R 工作流](h2r_inputs.md)。
+IK 的 `mano_to_robot_scale` 缩放相对腕部的人手目标，不缩放共同物体或计分轨迹。ARCTIC、OakInk2、HOT3D、TACO 各自对应上游的 Sharpa 重定向入口；DexterHand 没有上游入口，取这些入口的通用默认值（1.2，无腕初值偏置）。未列出的数据集没有默认配方；支持的结构与原生限制见 [H2R 工作流](h2r_inputs.md)。
 
 ## 机器人、动作与物理
 
