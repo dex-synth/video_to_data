@@ -5,9 +5,9 @@ import json
 
 import numpy as np
 
-from flash_chord.h2r.h2r_io import demo as demo_io
-from flash_chord.h2r.h2r_io import robot as robot_io
-from flash_chord.h2r.h2r_io import task as task_io
+from h2r_io import demo as demo_io
+from h2r_io import robot as robot_io
+from h2r_io import task as task_io
 
 CONTACT = {"condim": 4, "solref": [0.02, 1.0], "solimp": [0.9, 0.95, 0.001, 0.5, 2.0],
            "margin_m": 0.0, "gap_m": 0.0, "friction": [2.0, 0.005, 0.0001]}

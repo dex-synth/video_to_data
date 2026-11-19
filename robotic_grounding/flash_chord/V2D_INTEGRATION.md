@@ -5,7 +5,7 @@ This FlashCHORD fork trains only from sealed h2r_bench inputs. The public entry 
 See [the H2R workflow](docs/h2r_inputs.md) for preparation and execution.
 
 The task reference, object/environment scene and robot come from one h2r_bench task directory, read through
-the vendored `h2r/h2r_io` loader. The method's `h2r.prepare` uses V2D MANO joint frames, contact and Sharpa IK
+the h2r_bench loader `h2r_io` (package `h2r-io`). The method's `h2r.prepare` uses V2D MANO joint frames, contact and Sharpa IK
 components to derive its private reference.
 That reference is stored as `processed.parquet` inside the preparation package and is covered
 by the binding's file hashes. It is not a standalone public training input.

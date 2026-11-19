@@ -11,7 +11,7 @@ from h2r_synthetic import STRUCTURES, write_task
 from flash_chord.configuration import compose_config
 from flash_chord.h2r.assets import SUPPORT_BODY, scene_xml
 from flash_chord.h2r.configuration import require_h2r_input
-from flash_chord.h2r.h2r_io import export_task
+from h2r_io import export_task
 from flash_chord.h2r.inputs import BINDING, FORMAT, TIMING, load_input, load_prepared, seal_prepared, write_json
 from flash_chord.h2r.prepare import ik_settings, timed_stage
 from flash_chord.h2r.reference import JOINT_DRIVE, object_assets

@@ -15,6 +15,7 @@ for _flag in ("--xla_gpu_deterministic_ops=true", "--xla_gpu_autotune_level=0"):
         _flags.append(_flag)
 os.environ["XLA_FLAGS"] = " ".join(_flags)
 
+from h2r_io import client
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -36,7 +37,6 @@ from flash_chord.training.flash_sac.evaluation import load_policy_for_inference
 from flash_chord.utils.quat import quat_rotate_xyzw
 
 from .action import H2rActionConfig
-from .h2r_io import client
 from .inputs import BINDING, TRAINING_CLOCKS, load_prepared, sha256
 from .reference import load_h2r
 from .robot import H2rSharpaHands

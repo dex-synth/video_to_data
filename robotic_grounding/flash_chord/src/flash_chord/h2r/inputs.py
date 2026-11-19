@@ -3,8 +3,8 @@
 
 from pathlib import Path
 
-from .h2r_io import load_task
-from .h2r_io.files import file_hashes, read_json, sha256, verify_files, write_json
+from h2r_io import load_task
+from h2r_io.files import file_hashes, read_json, sha256, verify_files, write_json
 
 __all__ = ["BINDING", "DIGITS", "FORMAT", "TIMING", "TRAINING_CLOCKS", "frame_names", "load_input",
            "load_prepared", "read_json", "seal_prepared", "sha256", "write_json"]

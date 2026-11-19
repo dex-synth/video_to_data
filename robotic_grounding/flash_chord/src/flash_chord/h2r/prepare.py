@@ -10,10 +10,10 @@ import tempfile
 import time
 from pathlib import Path
 
+from h2r_io import export_task
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .h2r_io import export_task
 from .inputs import DIGITS, TIMING, frame_names, load_input, read_json, seal_prepared, sha256, write_json
 
 # The method's own preparation settings; the sealed binding records them.

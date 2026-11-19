@@ -32,10 +32,10 @@ CUDA and local-sequence integration coverage.
 
 The H2R adapter has two module entry points: `h2r.prepare` builds the immutable method reference from one
 h2r_bench task directory, and `h2r.evaluation` serves the native controller over the benchmark socket
-(`h2r-evaluation-v2`). `h2r/h2r_io/` is the vendored h2r_bench loader and wire protocol; it is never edited here
-and is excluded from the linters. Training and visualization use the scripts above. `h2r/configuration.py` checks
-sealed input identity and selects the task's participating hands before training, resume, evaluation, policy
-viewing and replay; native checkpoints and task-changing overrides are rejected.
+(`h2r-evaluation-v2`). Tasks and the wire protocol come from the h2r_bench loader `h2r_io` (package `h2r-io`,
+pinned to the h2r_bench tag `h2r-io-v1` in `tool.uv.sources`). Training and visualization use the scripts above.
+`h2r/configuration.py` checks sealed input identity and selects the task's participating hands before training,
+resume, evaluation, policy viewing and replay; native checkpoints and task-changing overrides are rejected.
 Commands and regression inputs are documented in
 [the H2R workflow](h2r_inputs.md); generated inputs, checkpoints, and diagnostic runs belong outside the source tree.
 

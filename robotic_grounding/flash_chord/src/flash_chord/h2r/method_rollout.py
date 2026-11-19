@@ -14,6 +14,7 @@ import argparse
 from dataclasses import fields, replace
 from pathlib import Path
 
+from h2r_io.method_rollout import state_names, write_method_rollout
 import jax.numpy as jnp
 import mujoco_warp
 import newton
@@ -38,7 +39,6 @@ from flash_chord.training.flash_sac.evaluation import load_policy_for_inference
 
 from .configuration import require_h2r_input
 from .controller import METHOD, controller_information, initial_robot  # also fixes the deployment's XLA flags
-from .h2r_io.method_rollout import state_names, write_method_rollout
 from .inputs import BINDING
 from .reference import load_h2r
 from .robot import H2rSharpaHands

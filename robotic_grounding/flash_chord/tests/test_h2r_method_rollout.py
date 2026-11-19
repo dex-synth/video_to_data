@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from flash_chord.h2r.controller import METHOD, controller_information, initial_robot
-from flash_chord.h2r.h2r_io.method_rollout import CONDITIONS, load_method_rollout
+from h2r_io.method_rollout import CONDITIONS, load_method_rollout
 from flash_chord.h2r.inputs import load_prepared, sha256
 from flash_chord.h2r.method_rollout import export
 from flash_chord.training.checkpoint import read_checkpoint_metadata

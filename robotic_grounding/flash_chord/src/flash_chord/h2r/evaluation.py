@@ -7,8 +7,9 @@ from pathlib import Path
 import socket
 import time
 
+from h2r_io.client import receive, send
+
 from .controller import Controller
-from .h2r_io.client import receive, send
 from .inputs import write_json
 
 

@@ -4,6 +4,7 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from h2r_io import Task
 import numpy as np
 
 from flash_chord.data.mano_sharpa import ManoSharpaReference, load_mano_sharpa
@@ -15,7 +16,6 @@ from flash_chord.data.reference import (
     ObjectJointPhysicsSpec,
 )
 
-from .h2r_io import Task
 from .inputs import load_prepared
 
 # The native assistance drive of an articulated-object joint (flash_chord.assets.registry); VOC scales it.

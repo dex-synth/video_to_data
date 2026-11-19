@@ -5,6 +5,7 @@ description = "Reference implementation for FlashCHORD robotic reference trackin
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "coacd==1.0.11",  # convex decomposition of object collision meshes (Newton has no built-in)
+    "h2r-io",  # h2r_bench task loader, protocol client and method-rollout writer; pinned in tool.uv.sources
     "hydra-core==1.3.2",
     "imageio-ffmpeg==0.6.0",  # stream Newton GL frames into reproducible MP4 policy visualizations
     "imgui-bundle==1.92.801",  # Newton GL viewer UI
@@ -37,6 +38,9 @@ train = [
     "wandb==0.22.2",
 ]
 
+[tool.uv.sources]
+h2r-io = { git = "ssh://git@github.com/dex-synth/h2r_bench.git", subdirectory = "packages/h2r-io", tag = "h2r-io-v1" }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -47,9 +51,6 @@ packages = ["src/flash_chord"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-# Vendored h2r-bench loader: never edited or reformatted here (`h2r-bench check-loader` verifies it).
-extend-exclude = ["h2r_io"]
-force-exclude = true
 
 [tool.ruff.lint]
 [tool.ruff.lint.mccabe]
@@ -61,11 +62,9 @@ max-complexity = 10
 [tool.black]
 line-length = 120
 target-version = ["py311"]
-force-exclude = "/h2r_io/"
 
 [tool.mypy]
 python_version = "3.11"
-exclude = ["/h2r_io/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

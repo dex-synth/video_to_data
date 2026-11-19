@@ -234,6 +234,7 @@ version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "coacd" },
+    { name = "h2r-io" },
     { name = "hydra-core" },
     { name = "imageio-ffmpeg" },
     { name = "imgui-bundle" },
@@ -271,6 +272,7 @@ requires-dist = [
     { name = "coacd", specifier = "==1.0.11" },
     { name = "distrax", marker = "extra == 'train'", specifier = "==0.1.9" },
     { name = "flax", marker = "extra == 'train'", specifier = "==0.12.7" },
+    { name = "h2r-io", git = "ssh://git@github.com/dex-synth/h2r_bench.git?subdirectory=packages%2Fh2r-io&tag=h2r-io-v1" },
     { name = "hydra-core", specifier = "==1.3.2" },
     { name = "imageio-ffmpeg", specifier = "==0.6.0" },
     { name = "imgui-bundle", specifier = "==1.92.801" },
@@ -389,6 +391,14 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/3f/93/977b9e679e356871d428ae7a1139ec767dd5177bed58a6344b4d2199e00f/glfw-2.10.0-py2.py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:cca5158d62189e08792b1ae54f92307a282921a0e7783315b467e21b0a381c88", size = 243480, upload-time = "2026-03-10T17:21:30.538Z" },
     { url = "https://files.pythonhosted.org/packages/f9/bd/cea9569c8f2188b0a104472951420434a3e1f5cf26f5836ef9d7227a1a30/glfw-2.10.0-py2.py3-none-win32.whl", hash = "sha256:5e024509989740e8e7b86cc4aab508195495f79879072b0e1f68bd036a2916ad", size = 552641, upload-time = "2026-03-10T17:21:32.653Z" },
     { url = "https://files.pythonhosted.org/packages/cc/9b/4366ad3e1c0688146c70aa6143584d6a8d88583b9390f106250e25a3d5cd/glfw-2.10.0-py2.py3-none-win_amd64.whl", hash = "sha256:7f787ee8645781f10e8800438ce4357ab38c573ffb191aba380c1e72eba6311c", size = 559423, upload-time = "2026-03-10T17:21:34.766Z" },
+]
+
+[[package]]
+name = "h2r-io"
+version = "1"
+source = { git = "ssh://git@github.com/dex-synth/h2r_bench.git?subdirectory=packages%2Fh2r-io&tag=h2r-io-v1#446866a6bb4248c68592395482c623397fa6252c" }
+dependencies = [
+    { name = "numpy" },
 ]
 
 [[package]]
